@@ -1,53 +1,58 @@
 /* Hand Quiz — question bank + game state machine.
-   Questions sourced from the Open Trivia DB (opentdb.com) — free, open, no API key.
-   Regenerate a fresh set with: python scripts/generate_questions.py
+   Questions are in Hindi (Devanagari): 15 about India + 5 about the world,
+   mostly easy — designed to be read by everyone including elderly players.
+
+   The lock-in is TIME-based (~0.8 s) instead of frame-based, so it feels
+   the same on fast and slow devices, and is forgiving for slow or
+   trembling hands.
+
    No DOM / CDN dependencies, so it can be unit-tested with plain Node:
    node quiz.test.mjs */
 
-export const STABLE_FRAMES = 12; // frames a finger count must hold to be accepted
-export const FEEDBACK_SECONDS = 1.6;
+export const STABLE_SECONDS = 0.8; // seconds a finger count must be held
+export const FEEDBACK_SECONDS = 2.0; // a little longer, for comfortable reading
 
 export const QUESTIONS = [
-  { prompt: "What is the most frequently used letter in the English alphabet?",
-    options: ["I", "A", "O", "E"], answer: 4 },
-  { prompt: "How many colors are there in a rainbow?",
-    options: ["10", "9", "7", "8"], answer: 3 },
-  { prompt: "What do the letters in the GMT time zone stand for?",
-    options: ["Global Meridian Time", "Glasgow Man Time", "General Median Time", "Greenwich Mean Time"], answer: 4 },
-  { prompt: "What are Panama hats made out of?",
-    options: ["Silk", "Hemp", "Straw", "Flax"], answer: 3 },
-  { prompt: "Which country has the Union Jack in its flag?",
-    options: ["South Africa", "Canada", "Hong Kong", "New Zealand"], answer: 4 },
-  { prompt: "Which of these colours is NOT featured in the logo for Google?",
-    options: ["Yellow", "Green", "Blue", "Pink"], answer: 4 },
-  { prompt: "What is H2O more commonly known as?",
-    options: ["Hydrogen", "Oxygen", "Water", "Salt"], answer: 3 },
-  { prompt: "How many moons does the Earth have?",
-    options: ["0", "3", "1", "2"], answer: 3 },
-  { prompt: "Who discovered the Law of Gravity?",
-    options: ["Sir Isaac Newton", "Charles Darwin", "Galileo Galilei", "Albert Einstein"], answer: 1 },
-  { prompt: "The human heart has how many chambers?",
-    options: ["6", "3", "4", "2"], answer: 3 },
-  { prompt: "Which Apollo mission was the first one to land on the Moon?",
-    options: ["Apollo 9", "Apollo 10", "Apollo 13", "Apollo 11"], answer: 4 },
-  { prompt: "Which element has the chemical symbol 'Fe'?",
-    options: ["Tin", "Silver", "Gold", "Iron"], answer: 4 },
-  { prompt: "About how many countries are there in the world?",
-    options: ["500", "100", "200", "300"], answer: 3 },
-  { prompt: "In which country is the city of Rio de Janeiro?",
-    options: ["Chile", "Venezuela", "Peru", "Brazil"], answer: 4 },
-  { prompt: "Which of the following Japanese islands is the biggest?",
-    options: ["Honshu", "Hokkaido", "Kyushu", "Shikoku"], answer: 1 },
-  { prompt: "How long did World War II last?",
-    options: ["7 years", "6 years", "5 years", "4 years"], answer: 2 },
-  { prompt: "What was the name commonly given to the ancient trade routes that connected the East and West of Eurasia?",
-    options: ["Spice Road", "Salt Road", "Clay Road", "Silk Road"], answer: 4 },
-  { prompt: "What year did World War I begin?",
-    options: ["1905", "1925", "1914", "1919"], answer: 3 },
-  { prompt: "How do you answer a question in this quiz?",
-    options: ["Blink twice", "Type it", "Say it out loud", "Hold up fingers"], answer: 4 },
-  { prompt: "How many questions does this quiz have?",
-    options: ["20", "8", "12", "16"], answer: 1 },
+  { prompt: "भारत की राजधानी क्या है?",
+    options: ["मुंबई", "नई दिल्ली", "कोलकाता", "चेन्नई"], answer: 2 },
+  { prompt: "भारत का राष्ट्रीय पक्षी कौन सा है?",
+    options: ["तोता", "कबूतर", "हंस", "मोर"], answer: 4 },
+  { prompt: "ताजमहल किस शहर में स्थित है?",
+    options: ["जयपुर", "आगरा", "दिल्ली", "लखनऊ"], answer: 2 },
+  { prompt: "ताजमहल का निर्माण किसने करवाया था?",
+    options: ["अकबर", "शाहजहाँ", "औरंगज़ेब", "हुमायूँ"], answer: 2 },
+  { prompt: "भारत का राष्ट्रगान क्या है?",
+    options: ["वंदे मातरम्", "सारे जहाँ से अच्छा", "जन गण मन", "जय जवान जय किसान"], answer: 3 },
+  { prompt: "भारतीय ध्वज में सबसे ऊपर कौन सा रंग होता है?",
+    options: ["हरा", "सफेद", "केसरिया", "नीला"], answer: 3 },
+  { prompt: "भारत के पहले प्रधानमंत्री कौन थे?",
+    options: ["महात्मा गांधी", "सरदार पटेल", "लाल बहादुर शास्त्री", "जवाहरलाल नेहरू"], answer: 4 },
+  { prompt: "भारत की सबसे लंबी नदी कौन सी है?",
+    options: ["गंगा", "यमुना", "गोदावरी", "कावेरी"], answer: 1 },
+  { prompt: "भारत का राष्ट्रीय पशु कौन सा है?",
+    options: ["शेर", "हाथी", "बाघ", "गाय"], answer: 3 },
+  { prompt: "दिवाली किस चीज़ का त्योहार है?",
+    options: ["रंगों का", "राखी का", "पतंगों का", "दीपों और रोशनी का"], answer: 4 },
+  { prompt: "क्रिकेट के एक ओवर में कितनी गेंदें फेंकी जाती हैं?",
+    options: ["4", "5", "6", "8"], answer: 3 },
+  { prompt: "सचिन तेंदुलकर किस खेल के महान खिलाड़ी हैं?",
+    options: ["हॉकी", "फुटबॉल", "टेनिस", "क्रिकेट"], answer: 4 },
+  { prompt: "चंद्रयान-3 चाँद पर किस वर्ष सफलतापूर्वक उतरा?",
+    options: ["2019", "2021", "2022", "2023"], answer: 4 },
+  { prompt: "UPI डिजिटल भुगतान प्रणाली किस देश की है?",
+    options: ["नेपाल", "भारत", "श्रीलंका", "जापान"], answer: 2 },
+  { prompt: "होली का त्योहार किस चीज़ के लिए प्रसिद्ध है?",
+    options: ["रंगों के लिए", "दीयों के लिए", "मिठाई के लिए", "उपवास के लिए"], answer: 1 },
+  { prompt: "विश्व की सबसे ऊँची पर्वत चोटी कौन सी है?",
+    options: ["के-टू", "कंचनजंगा", "माउंट एवरेस्ट", "मकालू"], answer: 3 },
+  { prompt: "पृथ्वी अपनी धुरी पर एक चक्कर कितने घंटों में पूरा करती है?",
+    options: ["12", "24", "36", "48"], answer: 2 },
+  { prompt: "विश्व का सबसे बड़ा महासागर कौन सा है?",
+    options: ["अटलांटिक", "हिंद", "आर्कटिक", "प्रशांत"], answer: 4 },
+  { prompt: "सूर्य किस दिशा में उगता है?",
+    options: ["पूर्व", "पश्चिम", "उत्तर", "दक्षिण"], answer: 1 },
+  { prompt: "गुरुत्वाकर्षण का नियम किसने खोजा था?",
+    options: ["अल्बर्ट आइंस्टीन", "गैलीलियो", "आइज़क न्यूटन", "चार्ल्स डार्विन"], answer: 3 },
 ];
 
 export class QuizGame {
@@ -61,10 +66,11 @@ export class QuizGame {
     this.index = 0;
     this.score = 0;
     this.phase = "intro"; // intro -> question -> feedback -> done
-    this.buffer = [];
     this.elapsed = 0;
     this.lastAnswer = null;
     this.lastCorrect = null;
+    this._lastCount = 0;
+    this._holdTime = 0;
   }
 
   get currentQuestion() {
@@ -78,7 +84,13 @@ export class QuizGame {
   update(counts, dt) {
     this.elapsed += dt;
     const best = counts.length ? Math.max(...counts) : 0;
-    const stable = this._isStable(best);
+    if (best === this._lastCount) {
+      this._holdTime += dt;
+    } else {
+      this._lastCount = best;
+      this._holdTime = 0;
+    }
+    const stable = this._holdTime >= STABLE_SECONDS;
 
     if (this.phase === "intro") {
       if (best >= 1 && stable) this._startQuestion();
@@ -99,22 +111,11 @@ export class QuizGame {
     }
   }
 
-  _isStable(count) {
-    if (this.buffer.length < STABLE_FRAMES) {
-      this.buffer.push(count);
-      if (this.buffer.length > STABLE_FRAMES) this.buffer.shift();
-      return false;
-    }
-    if (this.buffer.every((c) => c === count)) return true;
-    this.buffer.push(count);
-    if (this.buffer.length > STABLE_FRAMES) this.buffer.shift();
-    return false;
-  }
-
   _startQuestion() {
     this.phase = "question";
-    this.buffer = [];
     this.elapsed = 0;
+    this._lastCount = 0;
+    this._holdTime = 0;
   }
 
   _submit(answer) {
@@ -126,17 +127,11 @@ export class QuizGame {
   }
 
   heldCount() {
-    if (!this.buffer.length) return 0;
-    const last = this.buffer[this.buffer.length - 1];
-    return last >= 1 && this.buffer.every((c) => c === last) ? last : 0;
+    return this._lastCount >= 1 ? this._lastCount : 0;
   }
 
   lockProgress() {
-    if (!this.buffer.length) return 0;
-    const last = this.buffer[this.buffer.length - 1];
-    if (last < 1) return 0;
-    let run = 0;
-    for (let i = this.buffer.length - 1; i >= 0 && this.buffer[i] === last; i--) run++;
-    return Math.min(1, run / STABLE_FRAMES);
+    if (this._lastCount < 1) return 0;
+    return Math.min(1, this._holdTime / STABLE_SECONDS);
   }
 }
