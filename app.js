@@ -1,39 +1,17 @@
-/* Hand Quiz — browser version.
+/* Hand Quiz — browser version (mobile-friendly).
    MediaPipe Tasks Vision runs locally in the visitor's browser.
-   The quiz state machine and gesture heuristics are ports of the tested
-   desktop/ Python implementation. */
+   The quiz state machine lives in quiz.mjs (unit-tested via quiz.test.mjs). */
 
 import {
   HandLandmarker,
   FilesetResolver,
 } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
+import { QuizGame, QUESTIONS } from "./quiz.mjs";
 
 const MODEL_URL =
   "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
 const WASM_BASE =
   "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
-
-const STABLE_FRAMES = 12; // frames a finger count must hold to be accepted
-const FEEDBACK_SECONDS = 1.6;
-
-const QUESTIONS = [
-  { prompt: "What does this app use to find your hand in the camera feed?",
-    options: ["MediaPipe", "TensorFlow.js", "PyTorch", "scikit-learn"], answer: 1 },
-  { prompt: "How many landmarks does MediaPipe track per hand?",
-    options: ["10", "21", "35", "50"], answer: 2 },
-  { prompt: "How many hands can this tracker watch at the same time?",
-    options: ["Exactly 1", "2 (both hands)", "5", "Only webcams with depth sensors"], answer: 2 },
-  { prompt: "OpenCV stores color images in which channel order by default?",
-    options: ["RGB", "RGBA", "BGR", "HSV"], answer: 3 },
-  { prompt: "Which landmark index is the tip of the index finger?",
-    options: ["4", "8", "12", "20"], answer: 2 },
-  { prompt: "Roughly how fast does MediaPipe hand tracking run on a laptop CPU?",
-    options: ["~1 frame per minute", "~1 frame per second", "Real time (30+ FPS)", "It needs a GPU cluster"], answer: 3 },
-  { prompt: "What colour does this app draw on a locked-in correct answer?",
-    options: ["Green", "Blue", "Red", "Yellow"], answer: 1 },
-  { prompt: "How do you answer a question in this quiz?",
-    options: ["Say it out loud", "Type it", "Hold up fingers", "Blink twice"], answer: 3 },
-];
 
 const HAND_CONNECTIONS = [
   [0, 1], [1, 2], [2, 3], [3, 4],           // thumb
@@ -49,7 +27,9 @@ const $ = (id) => document.getElementById(id);
 const video = $("cam");
 const canvas = $("overlay");
 const ctx = canvas.getContext("2d");
+const stage = $("stage");
 
+const game = new QuizGame(QUESTIONS);
 let landmarker = null;
 let running = false;
 let lastT = 0;
@@ -57,97 +37,9 @@ let lastVideoTime = -1;
 let lastCounts = [];
 let fpsAvg = null;
 let renderedIndex = -1;
-const game = new QuizGame(QUESTIONS);
+let detectErrors = 0;
 
-/* ---------- quiz state machine (port of desktop/quiz.py) ---------- */
-class QuizGame {
-  constructor(questions) {
-    this.allQuestions = questions;
-    this.restart();
-  }
-
-  restart() {
-    this.questions = [...this.allQuestions].sort(() => Math.random() - 0.5);
-    this.index = 0;
-    this.score = 0;
-    this.phase = "intro";
-    this.buffer = [];
-    this.elapsed = 0;
-    this.lastAnswer = null;
-    this.lastCorrect = null;
-  }
-
-  get currentQuestion() {
-    return this.questions[this.index];
-  }
-
-  update(counts, dt) {
-    this.elapsed += dt;
-    const best = counts.length ? Math.max(...counts) : 0;
-    const stable = this._isStable(best);
-
-    if (this.phase === "intro") {
-      if (best >= 1 && stable) this._startQuestion();
-    } else if (this.phase === "question") {
-      if (best >= 1 && best <= 4 && stable) this._submit(best);
-    } else if (this.phase === "feedback") {
-      if (this.elapsed >= FEEDBACK_SECONDS) {
-        this.index += 1;
-        this.elapsed = 0;
-        if (this.index >= this.questions.length) {
-          this.phase = "done";
-        } else {
-          this._startQuestion();
-        }
-      }
-    } else if (this.phase === "done") {
-      if (best >= 1 && stable) this.restart();
-    }
-  }
-
-  _isStable(count) {
-    if (this.buffer.length < STABLE_FRAMES) {
-      this.buffer.push(count);
-      if (this.buffer.length > STABLE_FRAMES) this.buffer.shift();
-      return false;
-    }
-    if (this.buffer.every((c) => c === count)) return true;
-    this.buffer.push(count);
-    if (this.buffer.length > STABLE_FRAMES) this.buffer.shift();
-    return false;
-  }
-
-  _startQuestion() {
-    this.phase = "question";
-    this.buffer = [];
-    this.elapsed = 0;
-  }
-
-  _submit(answer) {
-    this.lastAnswer = answer;
-    this.lastCorrect = answer === this.currentQuestion.answer;
-    if (this.lastCorrect) this.score += 1;
-    this.phase = "feedback";
-    this.elapsed = 0;
-  }
-
-  heldCount() {
-    if (!this.buffer.length) return 0;
-    const last = this.buffer[this.buffer.length - 1];
-    return last >= 1 && this.buffer.every((c) => c === last) ? last : 0;
-  }
-
-  lockProgress() {
-    if (!this.buffer.length) return 0;
-    const last = this.buffer[this.buffer.length - 1];
-    if (last < 1) return 0;
-    let run = 0;
-    for (let i = this.buffer.length - 1; i >= 0 && this.buffer[i] === last; i--) run++;
-    return Math.min(1, run / STABLE_FRAMES);
-  }
-}
-
-/* ---------- gestures (port of desktop/gestures.py) ---------- */
+/* ---------- gesture recognition (same heuristic as desktop/gestures.py) ---------- */
 function dist(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
@@ -169,40 +61,114 @@ function countFingers(lm) {
   return fingersUp(lm).reduce((a, b) => a + b, 0);
 }
 
-/* ---------- startup ---------- */
-$("startBtn").addEventListener("click", async () => {
-  $("startBtn").disabled = true;
-  $("status").textContent = "Loading hand-tracking model…";
+/* ---------- camera + model startup (hardened for mobile) ---------- */
+async function openCamera() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    throw new Error(
+      "This browser cannot access the camera. Open the page over HTTPS (or localhost)."
+    );
+  }
+  // Mobile-safe constraints: front camera, *ideal* resolution (never exact),
+  // because many phone cameras don't offer 1280x720 and exact values fail.
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { width: 1280, height: 720 },
+    return await navigator.mediaDevices.getUserMedia({
       audio: false,
+      video: {
+        facingMode: "user",
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
+      },
     });
+  } catch (err) {
+    // Some mobile browsers reject facingMode/size constraints — plain retry.
+    return await navigator.mediaDevices.getUserMedia({ audio: false, video: true });
+  }
+}
+
+async function createLandmarker() {
+  const fileset = await FilesetResolver.forVisionTasks(WASM_BASE);
+  const opts = (delegate) => ({
+    baseOptions: { modelAssetPath: MODEL_URL, delegate },
+    runningMode: "VIDEO",
+    numHands: 2,
+  });
+  try {
+    return await HandLandmarker.createFromOptions(fileset, opts("GPU"));
+  } catch (err) {
+    // The GPU (WebGL) delegate crashes on some Android/iOS devices;
+    // the CPU delegate is slower but always works.
+    console.warn("GPU delegate failed, falling back to CPU:", err);
+    return await HandLandmarker.createFromOptions(fileset, opts("CPU"));
+  }
+}
+
+function showLoading(on, msg = "") {
+  $("loading").classList.toggle("hidden", !on);
+  $("loadMsg").textContent = msg;
+}
+
+function setStatus(text) {
+  $("status").textContent = text;
+}
+
+async function start() {
+  const btn = $("startBtn");
+  btn.disabled = true;
+  try {
+    showLoading(true, "Starting camera…");
+    const stream = await openCamera();
     video.srcObject = stream;
     await video.play();
+    // Wait until real dimensions exist (metadata race on mobile).
+    if (!video.videoWidth) {
+      await new Promise((res) =>
+        video.addEventListener("loadedmetadata", res, { once: true })
+      );
+    }
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    // Fit the video's true aspect ratio inside the stage.
+    stage.style.aspectRatio = `${video.videoWidth} / ${video.videoHeight}`;
+    layoutCanvas();
 
-    const fileset = await FilesetResolver.forVisionTasks(WASM_BASE);
-    landmarker = await HandLandmarker.createFromOptions(fileset, {
-      baseOptions: { modelAssetPath: MODEL_URL, delegate: "GPU" },
-      runningMode: "VIDEO",
-      numHands: 2,
-    });
+    showLoading(true, "Loading hand-tracking model…");
+    landmarker = await createLandmarker();
+    showLoading(false);
 
-    canvas.width = video.videoWidth || 1280;
-    canvas.height = video.videoHeight || 720;
-    $("stage").style.aspectRatio = `${canvas.width} / ${canvas.height}`;
-
-    $("startBtn").classList.add("hidden");
-    $("status").textContent = "";
+    btn.classList.add("hidden");
+    setStatus("");
     running = true;
     lastT = performance.now();
     requestAnimationFrame(loop);
   } catch (err) {
-    $("startBtn").disabled = false;
-    $("status").textContent =
-      "Could not start: " + err.message +
-      " — camera access needs HTTPS (or localhost) and permission.";
+    console.error(err);
+    showLoading(false);
+    btn.disabled = false;
+    setStatus("Could not start: " + err.message);
   }
+}
+
+/* Keep the overlay canvas exactly on top of the letterboxed video. */
+function layoutCanvas() {
+  const vw = video.videoWidth || 1280;
+  const vh = video.videoHeight || 720;
+  const sw = stage.clientWidth;
+  const sh = stage.clientHeight;
+  if (!sw || !sh) return;
+  const scale = Math.min(sw / vw, sh / vh);
+  const w = vw * scale;
+  const h = vh * scale;
+  canvas.style.width = `${w}px`;
+  canvas.style.height = `${h}px`;
+  canvas.style.left = `${(sw - w) / 2}px`;
+  canvas.style.top = `${(sh - h) / 2}px`;
+}
+new ResizeObserver(layoutCanvas).observe(stage);
+
+$("startBtn").addEventListener("click", start);
+$("restartBtn").addEventListener("click", () => {
+  game.restart();
+  renderedIndex = -1;
 });
 
 /* ---------- main loop ---------- */
@@ -212,11 +178,21 @@ function loop(now) {
   lastT = now;
   fpsAvg = fpsAvg === null ? 1 / dt : 0.9 * fpsAvg + 0.1 * (1 / dt);
 
-  if (video.currentTime !== lastVideoTime) {
-    lastVideoTime = video.currentTime;
-    const result = landmarker.detectForVideo(video, now);
-    lastCounts = result.landmarks.map(countFingers);
-    drawHands(result.landmarks);
+  try {
+    if (video.readyState >= 2 && video.currentTime !== lastVideoTime) {
+      lastVideoTime = video.currentTime;
+      const result = landmarker.detectForVideo(video, now);
+      lastCounts = result.landmarks.map(countFingers);
+      drawHands(result.landmarks);
+      detectErrors = 0;
+    }
+  } catch (err) {
+    // Don't die silently — surface repeated tracking failures.
+    if (++detectErrors > 5) {
+      running = false;
+      setStatus("Tracking error: " + err.message);
+      return;
+    }
   }
 
   game.update(lastCounts, dt);
@@ -231,7 +207,7 @@ function drawHands(hands) {
   for (const lm of hands) {
     // mirror x to match the mirrored <video>
     const pts = lm.map((p) => [(1 - p.x) * canvas.width, p.y * canvas.height]);
-    ctx.strokeStyle = locked ? "#f4d03f" : "#3cb043";
+    ctx.strokeStyle = locked ? "#f4d03f" : "#34d058";
     ctx.lineWidth = 3;
     for (const [a, b] of HAND_CONNECTIONS) {
       ctx.beginPath();
@@ -239,25 +215,27 @@ function drawHands(hands) {
       ctx.lineTo(pts[b][0], pts[b][1]);
       ctx.stroke();
     }
-    pts.forEach((p, i) => {
+    for (let i = 0; i < pts.length; i++) {
       ctx.beginPath();
-      ctx.arc(p[0], p[1], i % 4 === 0 ? 6 : 4, 0, Math.PI * 2);
+      ctx.arc(pts[i][0], pts[i][1], i % 4 === 0 ? 6 : 4, 0, Math.PI * 2);
       ctx.fillStyle = "#ffffff";
       ctx.fill();
-    });
+    }
   }
 }
 
 /* ---------- UI rendering ---------- */
 function render() {
-  const total = game.questions.length;
-  $("score").textContent = `Score: ${game.score}/${total}`;
-  $("qnum").textContent = `Q${Math.min(game.index + 1, total)}/${total}`;
-  $("fps").textContent = fpsAvg ? `${Math.round(fpsAvg)} FPS` : "";
+  const total = game.total;
+  $("score").textContent = `Score ${game.score}/${total}`;
+  $("qnum").textContent =
+    game.phase === "intro" || game.phase === "done"
+      ? "Hand Quiz"
+      : `Q ${Math.min(game.index + 1, total)}/${total}`;
 
-  $("intro").classList.toggle("hidden", game.phase !== "intro");
-  $("question").classList.toggle("hidden", game.phase !== "question");
-  $("done").classList.toggle("hidden", game.phase !== "done");
+  $("viewIntro").classList.toggle("hidden", game.phase !== "intro");
+  $("viewQuestion").classList.toggle("hidden", game.phase !== "question");
+  $("viewDone").classList.toggle("hidden", game.phase !== "done");
   if (game.phase !== "question") renderedIndex = -1;
 
   if (game.phase === "intro") {
@@ -295,25 +273,25 @@ function render() {
     $("answerFill").style.width = `${Math.round(prog * 100)}%`;
     $("holdLabel").textContent =
       held >= 1
-        ? `hold ${held} finger${held > 1 ? "s" : ""}…`
-        : "hold up the right number of fingers";
+        ? `Hold ${held} finger${held > 1 ? "s" : ""} steady…`
+        : "Hold up the right number of fingers";
   }
 
   const fb = $("feedback");
   if (game.phase === "feedback") {
     fb.classList.remove("hidden", "correct", "wrong");
     fb.classList.add(game.lastCorrect ? "correct" : "wrong");
+    $("feedbackEmoji").textContent = game.lastCorrect ? "✅" : "❌";
     $("feedbackText").textContent = game.lastCorrect ? "CORRECT!" : "WRONG";
     const q = game.currentQuestion;
     $("feedbackSub").textContent =
-      `You showed ${game.lastAnswer} finger${game.lastAnswer > 1 ? "s" : ""} — ` +
-      `answer: ${q.answer} (${q.options[q.answer - 1]})`;
+      `You showed ${game.lastAnswer} — answer: ${q.answer} (${q.options[q.answer - 1]})`;
   } else {
     fb.classList.add("hidden");
   }
 
   if (game.phase === "done") {
     const pct = Math.round((100 * game.score) / total);
-    $("finalScore").textContent = `Final score: ${game.score}/${total} (${pct}%)`;
+    $("finalScore").textContent = `${game.score} / ${total} correct (${pct}%)`;
   }
 }
