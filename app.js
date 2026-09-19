@@ -218,7 +218,11 @@ function loop(now) {
   }
 
   game.update(lastCounts, dt);
-  render();
+  try {
+    render(); // a UI glitch must never kill tracking — see the qnum bug this caught
+  } catch (err) {
+    console.error("render error:", err);
+  }
   requestAnimationFrame(loop);
 }
 
@@ -262,8 +266,8 @@ function render() {
   $("score").textContent = `Score ${game.score}/${total}`;
   $("qnum").textContent =
     game.phase === "intro" || game.phase === "done"
-      ? "Hand Quiz"
-      : `Q ${Math.min(game.index + 1, total)}/${total}`;
+      ? "🖐️ Hand Quiz"
+      : `🖐️ Q ${Math.min(game.index + 1, total)}/${total}`;
   $("quizProgressFill").style.width = `${Math.round((game.index / total) * 100)}%`;
 
   $("viewIntro").classList.toggle("hidden", game.phase !== "intro");
