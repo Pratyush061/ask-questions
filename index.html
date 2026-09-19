@@ -16,7 +16,7 @@
 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;800&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;800&family=Noto+Sans+Devanagari:wght@400;600;800&display=swap" rel="stylesheet" />
 
   <link rel="stylesheet" href="style.css" />
 </head>
@@ -24,7 +24,11 @@
   <header id="hud">
     <span class="chip" id="score">Score 0/20</span>
     <span class="chip logo" id="qnum">🖐️ Hand Quiz</span>
-    <button class="chip btn" id="restartBtn" title="Restart quiz">↺</button>
+    <span class="hud-group">
+      <button class="chip btn" id="fontDownBtn" title="Smaller text">A−</button>
+      <button class="chip btn" id="fontUpBtn" title="Bigger text">A+</button>
+      <button class="chip btn" id="restartBtn" title="Restart quiz">↺</button>
+    </span>
   </header>
 
   <!-- overall quiz progress -->
