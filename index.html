@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Hand Quiz — answer with your fingers</title>
+  <meta name="description" content="A webcam quiz game: MediaPipe tracks your hands, you answer questions by holding up fingers." />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header id="hud">
+    <span id="score">Score: 0/8</span>
+    <span id="qnum">Hand Quiz</span>
+    <span id="fps"></span>
+  </header>
+
+  <main id="stage">
+    <video id="cam" playsinline muted></video>
+    <canvas id="overlay"></canvas>
+
+    <!-- Start screen -->
+    <button id="startBtn">Start camera</button>
+    <p id="status"></p>
+
+    <!-- Intro -->
+    <section id="intro" class="panel hidden">
+      <h1>HAND QUIZ</h1>
+      <p>Answer questions by holding up fingers (1–4)</p>
+      <p class="dim">Show any fingers to begin…</p>
+      <div class="bar"><div id="introFill"></div></div>
+    </section>
+
+    <!-- Question -->
+    <section id="question" class="panel hidden">
+      <h2 id="prompt"></h2>
+      <ul id="options"></ul>
+      <div class="bar"><div id="answerFill"></div></div>
+      <div id="holdLabel" class="dim">hold up the right number of fingers</div>
+    </section>
+
+    <!-- Feedback flash -->
+    <div id="feedback" class="hidden">
+      <div id="feedbackText"></div>
+      <div id="feedbackSub"></div>
+    </div>
+
+    <!-- Done -->
+    <section id="done" class="panel hidden">
+      <h1>QUIZ COMPLETE</h1>
+      <p id="finalScore"></p>
+      <p class="dim">Show any fingers to play again</p>
+    </section>
+  </main>
+
+  <footer>
+    Hand tracking runs entirely in your browser — no video ever leaves this page.
+    Built with <a href="https://developers.google.com/mediapipe" target="_blank" rel="noopener">MediaPipe</a>.
+  </footer>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
