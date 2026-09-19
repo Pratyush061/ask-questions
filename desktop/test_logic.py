@@ -8,7 +8,9 @@ from types import SimpleNamespace as LM
 import numpy as np
 
 from gestures import finger_count, fingers_up, gesture_name
-from quiz import QuizGame, STABLE_FRAMES, QUESTION_BANK
+from quiz import QuizGame, STABLE_SECONDS, FEEDBACK_SECONDS, QUESTION_BANK
+
+DT = 1 / 30  # simulated frame time
 
 
 # --------------------------------------------------------------------------
@@ -61,55 +63,71 @@ def test_gestures():
     print("gestures: OK")
 
 
-def hold(game, count, frames, dt=1 / 30):
-    for _ in range(frames):
-        game.update([count] if count else [], dt)
+def hold(game, count, secs):
+    """Simulate holding `count` fingers for `secs` seconds at 30 fps."""
+    for _ in range(int(np.ceil(secs / DT))):
+        game.update([count] if count else [], DT)
 
 
 def test_quiz_flow():
-    # Fixed seed and a known question so we can assert the right answer.
     game = QuizGame(seed=42)
     assert game.phase == "intro"
 
     # No hand -> nothing happens
-    hold(game, 0, 30)
+    hold(game, 0, 2)
     assert game.phase == "intro"
 
     # Hold 2 fingers -> game starts
-    hold(game, 2, STABLE_FRAMES + 2)
+    hold(game, 2, STABLE_SECONDS + 0.3)
     assert game.phase == "question"
 
-    # Flickering counts must NOT submit an answer
-    for c in (1, 2, 3, 1, 2, 4, 1):
-        hold(game, c, 3)
+    # Flickering counts must NOT submit an answer (timer resets on change)
+    for c in (1, 2, 3, 4, 1, 2, 3, 4):
+        hold(game, c, 0.15)
     assert game.phase == "question"
 
-    # Submit a wrong answer (index 0 => always wrong, answer is >= 1)
+    # Submit a wrong answer
     q = game.current_question
     wrong = q.answer % len(q.options) + 1
-    hold(game, wrong, STABLE_FRAMES + 2)
+    hold(game, wrong, STABLE_SECONDS + 0.3)
     assert game.phase == "feedback"
     assert game.last_correct is False
     assert game.score == 0
 
     # Feedback timer advances to the next question
-    hold(game, 0, 60)
+    hold(game, 0, FEEDBACK_SECONDS + 0.5)
     assert game.phase == "question"
     assert game.index == 1
 
     # Now answer every remaining question correctly and finish the quiz
     while game.phase == "question":
-        hold(game, game.current_question.answer, STABLE_FRAMES + 2)
-        hold(game, 0, 60)
+        hold(game, game.current_question.answer, STABLE_SECONDS + 0.3)
+        hold(game, 0, FEEDBACK_SECONDS + 0.5)
     assert game.phase == "done"
     assert game.score == game.total - 1, f"score {game.score}/{game.total}"
 
     # Restart gesture -> back to a fresh intro screen
-    hold(game, 3, STABLE_FRAMES + 2)
+    hold(game, 3, STABLE_SECONDS + 0.3)
     assert game.phase == "intro"
     assert game.index == 0
     assert game.score == 0
     print("quiz flow: OK")
+
+
+def test_progress_helpers():
+    game = QuizGame(seed=1)
+    # start a question
+    hold(game, 2, STABLE_SECONDS + 0.3)
+    assert game.phase == "question"
+    # hold 3 fingers for half the lock-in time
+    hold(game, 3, STABLE_SECONDS / 2)
+    assert game.held_count == 3
+    assert abs(game.lock_progress - 0.5) < 0.05
+    # hand dropped -> progress resets
+    hold(game, 0, 0.2)
+    assert game.held_count == 0
+    assert game.lock_progress == 0.0
+    print("progress helpers: OK")
 
 
 def test_ui_renders():
@@ -117,10 +135,9 @@ def test_ui_renders():
     import ui
 
     game = QuizGame(seed=1)
-    hold(game, 2, 13)  # stability needs maxlen+1 frames to first return True
+    hold(game, 2, STABLE_SECONDS + 0.3)  # start the game
     # partially lock in a "3 finger" answer so the progress bar shows
-    for _ in range(7):
-        game.update([3], 1 / 30)
+    hold(game, 3, STABLE_SECONDS / 2)
     assert game.phase == "question"
     frame = np.zeros((720, 1280, 3), np.uint8)
     hand = make_hand((0, 1, 1, 0, 0))
@@ -132,6 +149,7 @@ def test_ui_renders():
 
 
 def test_question_bank():
+    assert len(QUESTION_BANK) == 20
     for q in QUESTION_BANK:
         assert 2 <= len(q.options) <= 4, q.prompt
         assert 1 <= q.answer <= len(q.options), q.prompt
@@ -142,5 +160,6 @@ if __name__ == "__main__":
     test_question_bank()
     test_gestures()
     test_quiz_flow()
+    test_progress_helpers()
     test_ui_renders()
     print("\nAll logic tests passed.")

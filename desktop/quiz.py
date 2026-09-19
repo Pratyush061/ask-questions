@@ -3,18 +3,18 @@
 Questions are multiple choice with up to four options. The player answers
 by holding up the matching number of fingers (1-4) in front of the webcam.
 An answer is only accepted once the same finger count has been stable for
-`STABLE_FRAMES` consecutive frames, which stops accidental flickers from
-being read as answers.
+STABLE_SECONDS (time-based, so it feels identical on fast/slow machines
+and is forgiving for slow or trembling hands).
 
-Questions sourced from the Open Trivia DB (opentdb.com) — free, open, no
-API key. Regenerate with: python scripts/generate_questions.py
+NOTE: the web version (quiz.mjs) uses the same questions in Hindi
+(Devanagari); this desktop copy uses English translations because OpenCV's
+built-in font cannot render Devanagari.
 
 This module is pure Python (no cv2 / mediapipe), so the whole game flow can
 be unit-tested without a camera.
 """
 
 import random
-from collections import deque
 
 
 class Question:
@@ -29,48 +29,48 @@ class Question:
 
 
 # Answer with: 1 finger, 2 fingers, 3 fingers or 4 fingers.
-# Kept in sync with the web version (quiz.mjs).
+# English translations of the Hindi question bank in quiz.mjs (web).
 QUESTION_BANK = [
-    Question("What is the most frequently used letter in the English alphabet?",
-              ["I", "A", "O", "E"], answer=4),
-    Question("How many colors are there in a rainbow?",
-              ["10", "9", "7", "8"], answer=3),
-    Question("What do the letters in the GMT time zone stand for?",
-              ["Global Meridian Time", "Glasgow Man Time", "General Median Time", "Greenwich Mean Time"], answer=4),
-    Question("What are Panama hats made out of?",
-              ["Silk", "Hemp", "Straw", "Flax"], answer=3),
-    Question("Which country has the Union Jack in its flag?",
-              ["South Africa", "Canada", "Hong Kong", "New Zealand"], answer=4),
-    Question("Which of these colours is NOT featured in the logo for Google?",
-              ["Yellow", "Green", "Blue", "Pink"], answer=4),
-    Question("What is H2O more commonly known as?",
-              ["Hydrogen", "Oxygen", "Water", "Salt"], answer=3),
-    Question("How many moons does the Earth have?",
-              ["0", "3", "1", "2"], answer=3),
-    Question("Who discovered the Law of Gravity?",
-              ["Sir Isaac Newton", "Charles Darwin", "Galileo Galilei", "Albert Einstein"], answer=1),
-    Question("The human heart has how many chambers?",
-              ["6", "3", "4", "2"], answer=3),
-    Question("Which Apollo mission was the first one to land on the Moon?",
-              ["Apollo 9", "Apollo 10", "Apollo 13", "Apollo 11"], answer=4),
-    Question("Which element has the chemical symbol 'Fe'?",
-              ["Tin", "Silver", "Gold", "Iron"], answer=4),
-    Question("About how many countries are there in the world?",
-              ["500", "100", "200", "300"], answer=3),
-    Question("In which country is the city of Rio de Janeiro?",
-              ["Chile", "Venezuela", "Peru", "Brazil"], answer=4),
-    Question("Which of the following Japanese islands is the biggest?",
-              ["Honshu", "Hokkaido", "Kyushu", "Shikoku"], answer=1),
-    Question("How long did World War II last?",
-              ["7 years", "6 years", "5 years", "4 years"], answer=2),
-    Question("What was the name commonly given to the ancient trade routes that connected the East and West of Eurasia?",
-              ["Spice Road", "Salt Road", "Clay Road", "Silk Road"], answer=4),
-    Question("What year did World War I begin?",
-              ["1905", "1925", "1914", "1919"], answer=3),
-    Question("How do you answer a question in this quiz?",
-              ["Blink twice", "Type it", "Say it out loud", "Hold up fingers"], answer=4),
-    Question("How many questions does this quiz have?",
-              ["20", "8", "12", "16"], answer=1),
+    Question("What is the capital of India?",
+              ["Mumbai", "New Delhi", "Kolkata", "Chennai"], answer=2),
+    Question("Which is the national bird of India?",
+              ["Parrot", "Pigeon", "Swan", "Peacock"], answer=4),
+    Question("In which city is the Taj Mahal located?",
+              ["Jaipur", "Agra", "Delhi", "Lucknow"], answer=2),
+    Question("Who had the Taj Mahal built?",
+              ["Akbar", "Shah Jahan", "Aurangzeb", "Humayun"], answer=2),
+    Question("What is the national anthem of India?",
+              ["Vande Mataram", "Sare Jahan Se Achha", "Jana Gana Mana", "Jai Jawan Jai Kisan"], answer=3),
+    Question("Which colour is at the top of the Indian flag?",
+              ["Green", "White", "Saffron", "Blue"], answer=3),
+    Question("Who was the first Prime Minister of India?",
+              ["Mahatma Gandhi", "Sardar Patel", "Lal Bahadur Shastri", "Jawaharlal Nehru"], answer=4),
+    Question("Which is the longest river of India?",
+              ["Ganga", "Yamuna", "Godavari", "Kaveri"], answer=1),
+    Question("Which is the national animal of India?",
+              ["Lion", "Elephant", "Tiger", "Cow"], answer=3),
+    Question("Diwali is the festival of what?",
+              ["Colours", "Rakhi", "Kites", "Lamps and light"], answer=4),
+    Question("How many balls are bowled in one over of cricket?",
+              ["4", "5", "6", "8"], answer=3),
+    Question("Sachin Tendulkar is a legend of which sport?",
+              ["Hockey", "Football", "Tennis", "Cricket"], answer=4),
+    Question("In which year did Chandrayaan-3 land on the Moon?",
+              ["2019", "2021", "2022", "2023"], answer=4),
+    Question("UPI is the digital payment system of which country?",
+              ["Nepal", "India", "Sri Lanka", "Japan"], answer=2),
+    Question("Holi is famous as the festival of what?",
+              ["Colours", "Lamps", "Sweets", "Fasting"], answer=1),
+    Question("Which is the highest mountain peak in the world?",
+              ["K2", "Kangchenjunga", "Mount Everest", "Makalu"], answer=3),
+    Question("In how many hours does the Earth complete one rotation?",
+              ["12", "24", "36", "48"], answer=2),
+    Question("Which is the largest ocean in the world?",
+              ["Atlantic", "Indian", "Arctic", "Pacific"], answer=4),
+    Question("In which direction does the sun rise?",
+              ["East", "West", "North", "South"], answer=1),
+    Question("Who discovered the law of gravity?",
+              ["Albert Einstein", "Galileo", "Isaac Newton", "Charles Darwin"], answer=3),
 ]
 
 
@@ -80,8 +80,8 @@ QUESTION = "question"  # waiting for a stable finger count
 FEEDBACK = "feedback"  # showing right/wrong for a moment
 DONE = "done"         # final score screen
 
-STABLE_FRAMES = 12    # frames a finger count must hold to count as an answer
-FEEDBACK_SECONDS = 1.6
+STABLE_SECONDS = 0.8   # seconds a finger count must be held (time-based)
+FEEDBACK_SECONDS = 2.0
 
 
 class QuizGame:
@@ -90,7 +90,6 @@ class QuizGame:
     def __init__(self, questions=None, seed=None):
         self.rng = random.Random(seed)
         self.all_questions = list(questions if questions is not None else QUESTION_BANK)
-        self.stable_buffer = deque(maxlen=STABLE_FRAMES)
         self.elapsed = 0.0
         self.restart()
 
@@ -101,8 +100,9 @@ class QuizGame:
         self.index = 0
         self.score = 0
         self.phase = INTRO
-        self.stable_buffer.clear()
         self.elapsed = 0.0
+        self._last_count = 0
+        self._hold_time = 0.0
 
     @property
     def current_question(self):
@@ -124,7 +124,12 @@ class QuizGame:
         """
         self.elapsed += dt
         best = max(finger_counts) if finger_counts else 0
-        stable = self._is_stable(best)
+        if best == self._last_count:
+            self._hold_time += dt
+        else:
+            self._last_count = best
+            self._hold_time = 0.0
+        stable = self._hold_time >= STABLE_SECONDS
 
         if self.phase == INTRO:
             if best >= 1 and stable:
@@ -148,20 +153,11 @@ class QuizGame:
                 self.restart()
 
     # -- helpers ---------------------------------------------------------------
-    def _is_stable(self, count):
-        """True when the buffer is full and every entry equals `count`."""
-        if len(self.stable_buffer) < self.stable_buffer.maxlen:
-            self.stable_buffer.append(count)
-            return False
-        if all(c == count for c in self.stable_buffer):
-            return True
-        self.stable_buffer.append(count)
-        return False
-
     def _start_question(self):
         self.phase = QUESTION
-        self.stable_buffer.clear()
         self.elapsed = 0.0
+        self._last_count = 0
+        self._hold_time = 0.0
 
     def _submit_answer(self, answer):
         q = self.current_question
@@ -176,25 +172,11 @@ class QuizGame:
     @property
     def held_count(self):
         """The finger count currently being held (for the progress bar)."""
-        if not self.stable_buffer:
-            return 0
-        last = self.stable_buffer[-1]
-        if last >= 1 and all(c == last for c in self.stable_buffer):
-            return last
-        return 0
+        return self._last_count if self._last_count >= 1 else 0
 
     @property
     def lock_progress(self):
         """0.0 - 1.0, how close the held gesture is to being accepted."""
-        if len(self.stable_buffer) == 0:
+        if self._last_count < 1:
             return 0.0
-        last = self.stable_buffer[-1]
-        if last < 1:
-            return 0.0
-        run = 0
-        for c in reversed(self.stable_buffer):
-            if c == last:
-                run += 1
-            else:
-                break
-        return min(1.0, run / self.stable_buffer.maxlen)
+        return min(1.0, self._hold_time / STABLE_SECONDS)

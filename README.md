@@ -2,9 +2,14 @@
 
 A real-time computer-vision quiz game: your webcam feed is processed with
 **MediaPipe** hand tracking, questions appear on screen, and you answer by
-holding up **1–4 fingers**. An answer only counts once the finger count has
-been stable for ~0.4 s, so flickers never register. **20 general-knowledge
-questions** per round, shuffled every time.
+holding up **1–4 fingers**. An answer counts once the finger count has been
+held steady for ~0.8 s (time-based, so slow or trembling hands don't miss).
+
+**Built for everyone, including elderly and low-eyesight players:**
+
+- Questions in **Hindi (Devanagari)** — 15 about India + 5 about the world
+- **A+ / A− text-size buttons** — the chosen size is remembered for the next visit
+- **High-contrast theme** — dark text on a light/yellow background
 
 Works on **desktop and mobile browsers** (responsive layout, front camera,
 automatic GPU→CPU fallback for devices where WebGL tracking fails).
@@ -69,8 +74,9 @@ automatically on first run, or pre-fetch it with `python download_model.py`.
    than its middle knuckle; the thumb is *up* when its tip is farther from
    the pinky knuckle than the joint below it.
 3. **Quiz state machine** (`quiz.mjs` / `desktop/quiz.py`) — intro → question
-   → feedback → score. A finger count must stay identical for 12 consecutive
-   frames (~0.4 s) before it is accepted, shown as a lock-in progress bar.
+   → feedback → score. A finger count must be held steady for ~0.8 s
+   (time-based, identical on every device) before it is accepted, shown as a
+   lock-in progress bar.
 4. **UI** — mobile-first responsive layout: video and question panel stack
    vertically on phones, sit side by side in landscape / on desktop. The
    overlay canvas is kept pixel-aligned with the letterboxed video.
@@ -102,7 +108,7 @@ at the top of `app.js`.
   a spinner; on slow connections this can take a moment.
 - **Tracking stops with an error** — rare device-specific WASM problems;
   the page shows the error text. Tap Restart to try again.
-- **Answers trigger accidentally** — raise `STABLE_FRAMES` in `quiz.mjs`
+- **Answers trigger accidentally** — raise `STABLE_SECONDS` in `quiz.mjs`
   (or `desktop/quiz.py`); lower it for faster lock-in.
 
 ## Questions
@@ -125,12 +131,15 @@ region-specific questions you may want to swap out.
 
 ## Customizing
 
-- **Questions** — edit the `QUESTIONS` array in `quiz.mjs` (web) or
-  `QUESTION_BANK` in `desktop/quiz.py`, or regenerate with
+- **Questions** — edit the `QUESTIONS` array in `quiz.mjs` (web, Hindi) or
+  `QUESTION_BANK` in `desktop/quiz.py` (English translations — OpenCV's
+  built-in font cannot render Devanagari), or regenerate with
   `scripts/generate_questions.py`. Up to 4 options each; `answer` is
   the 1-based index of the correct option.
-- **Lock-in speed** — `STABLE_FRAMES` (12): lower = faster, more false
+- **Lock-in speed** — `STABLE_SECONDS` (0.8): lower = faster, more false
   positives.
+- **Text size** — the A+ / A− buttons offer 5 steps (1× to 2×); the choice
+  is stored in `localStorage` under `hq-text-scale`.
 - **Detection strictness** — the `HandLandmarker` options in `app.js` or
   `desktop/hand_tracker.py`.
 
@@ -141,7 +150,7 @@ region-specific questions you may want to swap out.
 ├── app.js            # camera + MediaPipe JS tracking + drawing + UI glue
 ├── quiz.mjs          # question bank + game state machine (unit-tested)
 ├── quiz.test.mjs     # Node tests for the quiz logic
-├── style.css         # mobile-first responsive styling
+├── style.css         # high-contrast mobile-first responsive styling
 ├── scripts/
 │   └── generate_questions.py   # regenerate question banks from Open Trivia DB
 └── desktop/          # original Python + OpenCV desktop app
