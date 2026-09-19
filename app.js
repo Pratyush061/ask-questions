@@ -15,6 +15,22 @@ import {
 } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
 import { QuizGame, QUESTIONS } from "./quiz.mjs";
 
+/* ---------- text size (accessibility: A+ / A- buttons, remembered) ---------- */
+const SCALE_KEY = "hq-text-scale";
+const SCALES = [1, 1.25, 1.5, 1.75, 2];
+let scaleIdx = 0;
+try {
+  const saved = parseInt(localStorage.getItem(SCALE_KEY) ?? "0", 10);
+  if (saved >= 0 && saved < SCALES.length) scaleIdx = saved;
+} catch (e) { /* private browsing etc. */ }
+
+function applyScale() {
+  document.documentElement.style.setProperty("--text-scale", String(SCALES[scaleIdx]));
+  try { localStorage.setItem(SCALE_KEY, String(scaleIdx)); } catch (e) { /* ignore */ }
+  $("fontUpBtn").disabled = scaleIdx >= SCALES.length - 1;
+  $("fontDownBtn").disabled = scaleIdx <= 0;
+}
+
 const MODEL_URL =
   "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
 const WASM_BASE =
@@ -188,6 +204,15 @@ function layoutCanvas() {
 new ResizeObserver(layoutCanvas).observe(stage);
 
 $("startBtn").addEventListener("click", start);
+$("fontUpBtn").addEventListener("click", () => {
+  scaleIdx = Math.min(SCALES.length - 1, scaleIdx + 1);
+  applyScale();
+});
+$("fontDownBtn").addEventListener("click", () => {
+  scaleIdx = Math.max(0, scaleIdx - 1);
+  applyScale();
+});
+applyScale();
 $("restartBtn").addEventListener("click", () => {
   game.restart();
   renderedIndex = -1;
