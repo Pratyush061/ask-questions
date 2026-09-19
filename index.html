@@ -2,60 +2,70 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Hand Quiz — answer with your fingers</title>
   <meta name="description" content="A webcam quiz game: MediaPipe tracks your hands, you answer questions by holding up fingers." />
+  <meta name="theme-color" content="#0b0f14" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🖐️</text></svg>" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
   <header id="hud">
-    <span id="score">Score: 0/8</span>
-    <span id="qnum">Hand Quiz</span>
-    <span id="fps"></span>
+    <span class="chip" id="score">Score 0/20</span>
+    <span class="chip" id="qnum">Hand Quiz</span>
+    <button class="chip btn" id="restartBtn" title="Restart quiz">↺ Restart</button>
   </header>
 
-  <main id="stage">
-    <video id="cam" playsinline muted></video>
-    <canvas id="overlay"></canvas>
+  <main id="wrap">
+    <!-- camera area: aspect ratio is set to the real video ratio at startup -->
+    <div id="stage">
+      <video id="cam" playsinline muted></video>
+      <canvas id="overlay"></canvas>
 
-    <!-- Start screen -->
-    <button id="startBtn">Start camera</button>
-    <p id="status"></p>
+      <button id="startBtn">
+        <span class="big">🖐️</span>
+        <span>Start camera</span>
+      </button>
+      <p id="status"></p>
 
-    <!-- Intro -->
-    <section id="intro" class="panel hidden">
-      <h1>HAND QUIZ</h1>
-      <p>Answer questions by holding up fingers (1–4)</p>
-      <p class="dim">Show any fingers to begin…</p>
-      <div class="bar"><div id="introFill"></div></div>
-    </section>
+      <div id="loading" class="hidden">
+        <div class="spinner"></div>
+        <p id="loadMsg">Loading…</p>
+      </div>
 
-    <!-- Question -->
-    <section id="question" class="panel hidden">
-      <h2 id="prompt"></h2>
-      <ul id="options"></ul>
-      <div class="bar"><div id="answerFill"></div></div>
-      <div id="holdLabel" class="dim">hold up the right number of fingers</div>
-    </section>
-
-    <!-- Feedback flash -->
-    <div id="feedback" class="hidden">
-      <div id="feedbackText"></div>
-      <div id="feedbackSub"></div>
+      <div id="feedback" class="hidden">
+        <div id="feedbackEmoji"></div>
+        <div id="feedbackText"></div>
+        <div id="feedbackSub"></div>
+      </div>
     </div>
 
-    <!-- Done -->
-    <section id="done" class="panel hidden">
-      <h1>QUIZ COMPLETE</h1>
-      <p id="finalScore"></p>
-      <p class="dim">Show any fingers to play again</p>
+    <!-- quiz panel: below the video on phones, beside it on wide screens -->
+    <section id="panel">
+      <div id="viewIntro" class="view">
+        <h1>🖐️ Hand Quiz</h1>
+        <p>The camera tracks your hand. Answer each question by
+           <strong>holding up 1–4 fingers</strong> until the bar fills.</p>
+        <p class="dim">Show any fingers to begin…</p>
+        <div class="bar"><div id="introFill"></div></div>
+      </div>
+
+      <div id="viewQuestion" class="view hidden">
+        <h2 id="prompt"></h2>
+        <ul id="options"></ul>
+        <div class="bar"><div id="answerFill"></div></div>
+        <div id="holdLabel" class="dim"></div>
+      </div>
+
+      <div id="viewDone" class="view hidden">
+        <h1>🎉 Quiz complete</h1>
+        <p id="finalScore"></p>
+        <p class="dim">Show any fingers — or tap Restart — to play again</p>
+      </div>
     </section>
   </main>
 
-  <footer>
-    Hand tracking runs entirely in your browser — no video ever leaves this page.
-    Built with <a href="https://developers.google.com/mediapipe" target="_blank" rel="noopener">MediaPipe</a>.
-  </footer>
+  <footer>Hand tracking runs entirely in your browser · built with MediaPipe</footer>
 
   <script type="module" src="app.js"></script>
 </body>
