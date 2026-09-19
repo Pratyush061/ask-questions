@@ -60,9 +60,10 @@ automatically on first run, or pre-fetch it with `python download_model.py`.
 ## How it works
 
 1. **Hand tracking** — MediaPipe's HandLandmarker (VIDEO running mode,
-   up to 2 hands) returns 21 3-D landmarks per hand. On the web it tries the
-   fast WebGL delegate first and falls back to the CPU delegate if the
-   device's GPU stack fails (common on some Android/iOS devices).
+   one hand on the web version, two in the desktop version) returns 21 3-D
+   landmarks per hand. On the web it tries the fast WebGL delegate first and
+   falls back to the CPU delegate if the device's GPU stack fails (common on
+   some Android/iOS devices).
 2. **Gesture recognition** — a rotation-invariant heuristic counts extended
    fingers: a finger is *up* when its fingertip is farther from the wrist
    than its middle knuckle; the thumb is *up* when its tip is farther from
@@ -73,6 +74,21 @@ automatically on first run, or pre-fetch it with `python download_model.py`.
 4. **UI** — mobile-first responsive layout: video and question panel stack
    vertically on phones, sit side by side in landscape / on desktop. The
    overlay canvas is kept pixel-aligned with the letterboxed video.
+
+## ⚡ Performance (why it's fast on phones)
+
+- **Model preloads at page open** — the ~8 MB model starts downloading as
+  soon as the page loads (not when you tap Start), so camera permission and
+  model download happen in parallel.
+- **640×480 detection frames** — ~4× fewer pixels than 1280×720, which is
+  the single biggest speed win; the video still looks fine on a phone.
+- **One hand** — roughly 2× faster than tracking two.
+- **Median filter** — finger counts are smoothed over 5 frames, which
+  removes flicker without any extra model work.
+- **GPU → CPU fallback** — WebGL when available, CPU otherwise.
+
+To trade speed for quality, change `CAM_WIDTH`/`CAM_HEIGHT` and `NUM_HANDS`
+at the top of `app.js`.
 
 ## Mobile notes & troubleshooting
 
