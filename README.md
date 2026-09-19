@@ -3,8 +3,8 @@
 A real-time computer-vision quiz game: your webcam feed is processed with
 **MediaPipe** hand tracking, questions appear on screen, and you answer by
 holding up **1–4 fingers**. An answer only counts once the finger count has
-been stable for ~0.4 s, so flickers never register. **20 questions** per
-round, shuffled every time.
+been stable for ~0.4 s, so flickers never register. **20 general-knowledge
+questions** per round, shuffled every time.
 
 Works on **desktop and mobile browsers** (responsive layout, front camera,
 automatic GPU→CPU fallback for devices where WebGL tracking fails).
@@ -105,10 +105,29 @@ at the top of `app.js`.
 - **Answers trigger accidentally** — raise `STABLE_FRAMES` in `quiz.mjs`
   (or `desktop/quiz.py`); lower it for faster lock-in.
 
+## Questions
+
+The 20 general-knowledge questions were generated from the
+[Open Trivia DB](https://opentdb.com) — a free, open API that needs **no
+API key** — and baked into the app as static data (so there is zero
+runtime cost: no network call, no extra load time, no speed impact).
+
+To generate a fresh set:
+
+```bash
+python scripts/generate_questions.py                  # 20 general-knowledge questions
+python scripts/generate_questions.py --category 17     # Science & Nature
+```
+
+The script prints ready-to-paste banks for both `quiz.mjs` and
+`desktop/quiz.py`. Review the output — the API occasionally serves
+region-specific questions you may want to swap out.
+
 ## Customizing
 
 - **Questions** — edit the `QUESTIONS` array in `quiz.mjs` (web) or
-  `QUESTION_BANK` in `desktop/quiz.py`. Up to 4 options each; `answer` is
+  `QUESTION_BANK` in `desktop/quiz.py`, or regenerate with
+  `scripts/generate_questions.py`. Up to 4 options each; `answer` is
   the 1-based index of the correct option.
 - **Lock-in speed** — `STABLE_FRAMES` (12): lower = faster, more false
   positives.
@@ -123,6 +142,8 @@ at the top of `app.js`.
 ├── quiz.mjs          # question bank + game state machine (unit-tested)
 ├── quiz.test.mjs     # Node tests for the quiz logic
 ├── style.css         # mobile-first responsive styling
+├── scripts/
+│   └── generate_questions.py   # regenerate question banks from Open Trivia DB
 └── desktop/          # original Python + OpenCV desktop app
     ├── main.py         # webcam loop
     ├── hand_tracker.py # MediaPipe HandLandmarker wrapper
