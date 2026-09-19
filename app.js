@@ -1,6 +1,13 @@
-/* Hand Quiz — browser version (mobile-friendly).
+/* Hand Quiz — browser version, tuned for mobile speed.
    MediaPipe Tasks Vision runs locally in the visitor's browser.
-   The quiz state machine lives in quiz.mjs (unit-tested via quiz.test.mjs). */
+
+   Speed strategy:
+   - The model + WASM download starts the moment the page loads (and
+     index.html <link rel="preload"> usually already fetched the model).
+   - Detection runs on a 640x480 frame: ~4x fewer pixels than 1280x720.
+   - One hand only: roughly 2x faster than two.
+   - GPU (WebGL) delegate with automatic CPU fallback.
+   - A small median filter keeps finger counts steady without re-detecting. */
 
 import {
   HandLandmarker,
@@ -12,6 +19,12 @@ const MODEL_URL =
   "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
 const WASM_BASE =
   "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
+
+// ---- performance tuning ----------------------------------------------------
+const NUM_HANDS = 1;     // one hand: ~2x faster than two
+const CAM_WIDTH = 640;   // small frames: ~4x fewer pixels than 1280x720
+const CAM_HEIGHT = 480;
+const SMOOTH_WINDOW = 5; // median-filter window for finger counts
 
 const HAND_CONNECTIONS = [
   [0, 1], [1, 2], [2, 3], [3, 4],           // thumb
@@ -35,7 +48,6 @@ let running = false;
 let lastT = 0;
 let lastVideoTime = -1;
 let lastCounts = [];
-let fpsAvg = null;
 let renderedIndex = -1;
 let detectErrors = 0;
 
@@ -48,9 +60,7 @@ function fingersUp(lm) {
   const wrist = lm[0];
   const pinkyMcp = lm[17];
   const up = [];
-  // thumb: tip farther from the pinky knuckle than the joint below it
   up.push(dist(lm[4], pinkyMcp) > dist(lm[3], pinkyMcp) ? 1 : 0);
-  // other fingers: tip farther from the wrist than the middle knuckle
   for (const [tip, pip] of [[8, 6], [12, 10], [16, 14], [20, 18]]) {
     up.push(dist(lm[tip], wrist) > dist(lm[pip], wrist) * 1.15 ? 1 : 0);
   }
@@ -61,44 +71,57 @@ function countFingers(lm) {
   return fingersUp(lm).reduce((a, b) => a + b, 0);
 }
 
-/* ---------- camera + model startup (hardened for mobile) ---------- */
+/* Median filter: kills single-frame flicker so counts feel rock solid. */
+let countHistory = [];
+function medianSmooth(count) {
+  countHistory.push(count);
+  if (countHistory.length > SMOOTH_WINDOW) countHistory.shift();
+  const s = [...countHistory].sort((a, b) => a - b);
+  return s[s.length >> 1];
+}
+
+/* ---------- model: start loading immediately, not on click ---------- */
+async function createLandmarker() {
+  const fileset = await FilesetResolver.forVisionTasks(WASM_BASE);
+  const opts = (delegate) => ({
+    baseOptions: { modelAssetPath: MODEL_URL, delegate },
+    runningMode: "VIDEO",
+    numHands: NUM_HANDS,
+  });
+  try {
+    return await HandLandmarker.createFromOptions(fileset, opts("GPU"));
+  } catch (err) {
+    // WebGL delegate crashes on some Android/iOS devices; CPU always works.
+    console.warn("GPU delegate failed, falling back to CPU:", err);
+    return await HandLandmarker.createFromOptions(fileset, opts("CPU"));
+  }
+}
+
+let modelError = null;
+const modelPromise = createLandmarker().catch((err) => {
+  modelError = err;
+  return null;
+});
+
+/* ---------- camera (mobile-safe constraints) ---------- */
 async function openCamera() {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     throw new Error(
       "This browser cannot access the camera. Open the page over HTTPS (or localhost)."
     );
   }
-  // Mobile-safe constraints: front camera, *ideal* resolution (never exact),
-  // because many phone cameras don't offer 1280x720 and exact values fail.
   try {
     return await navigator.mediaDevices.getUserMedia({
       audio: false,
       video: {
         facingMode: "user",
-        width: { ideal: 1280 },
-        height: { ideal: 720 },
+        width: { ideal: CAM_WIDTH },
+        height: { ideal: CAM_HEIGHT },
       },
     });
   } catch (err) {
     // Some mobile browsers reject facingMode/size constraints — plain retry.
     return await navigator.mediaDevices.getUserMedia({ audio: false, video: true });
-  }
-}
-
-async function createLandmarker() {
-  const fileset = await FilesetResolver.forVisionTasks(WASM_BASE);
-  const opts = (delegate) => ({
-    baseOptions: { modelAssetPath: MODEL_URL, delegate },
-    runningMode: "VIDEO",
-    numHands: 2,
-  });
-  try {
-    return await HandLandmarker.createFromOptions(fileset, opts("GPU"));
-  } catch (err) {
-    // The GPU (WebGL) delegate crashes on some Android/iOS devices;
-    // the CPU delegate is slower but always works.
-    console.warn("GPU delegate failed, falling back to CPU:", err);
-    return await HandLandmarker.createFromOptions(fileset, opts("CPU"));
   }
 }
 
@@ -119,7 +142,6 @@ async function start() {
     const stream = await openCamera();
     video.srcObject = stream;
     await video.play();
-    // Wait until real dimensions exist (metadata race on mobile).
     if (!video.videoWidth) {
       await new Promise((res) =>
         video.addEventListener("loadedmetadata", res, { once: true })
@@ -127,12 +149,12 @@ async function start() {
     }
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
-    // Fit the video's true aspect ratio inside the stage.
     stage.style.aspectRatio = `${video.videoWidth} / ${video.videoHeight}`;
     layoutCanvas();
 
     showLoading(true, "Loading hand-tracking model…");
-    landmarker = await createLandmarker();
+    landmarker = await modelPromise;
+    if (!landmarker) throw modelError || new Error("Model failed to load");
     showLoading(false);
 
     btn.classList.add("hidden");
@@ -150,8 +172,8 @@ async function start() {
 
 /* Keep the overlay canvas exactly on top of the letterboxed video. */
 function layoutCanvas() {
-  const vw = video.videoWidth || 1280;
-  const vh = video.videoHeight || 720;
+  const vw = video.videoWidth || 640;
+  const vh = video.videoHeight || 480;
   const sw = stage.clientWidth;
   const sh = stage.clientHeight;
   if (!sw || !sh) return;
@@ -176,18 +198,18 @@ function loop(now) {
   if (!running) return;
   const dt = Math.min(0.1, (now - lastT) / 1000);
   lastT = now;
-  fpsAvg = fpsAvg === null ? 1 / dt : 0.9 * fpsAvg + 0.1 * (1 / dt);
 
   try {
     if (video.readyState >= 2 && video.currentTime !== lastVideoTime) {
       lastVideoTime = video.currentTime;
       const result = landmarker.detectForVideo(video, now);
-      lastCounts = result.landmarks.map(countFingers);
+      const raw = result.landmarks.length ? countFingers(result.landmarks[0]) : 0;
+      lastCounts = [medianSmooth(raw)];
       drawHands(result.landmarks);
+      updateGestureChip(result.landmarks.length ? lastCounts[0] : null);
       detectErrors = 0;
     }
   } catch (err) {
-    // Don't die silently — surface repeated tracking failures.
     if (++detectErrors > 5) {
       running = false;
       setStatus("Tracking error: " + err.message);
@@ -200,14 +222,24 @@ function loop(now) {
   requestAnimationFrame(loop);
 }
 
+function updateGestureChip(count) {
+  const chip = $("gestureChip");
+  if (count === null || count === 0) {
+    chip.classList.add("hidden");
+  } else {
+    chip.classList.remove("hidden");
+    chip.textContent = `✋ ${count}`;
+  }
+}
+
 /* ---------- drawing ---------- */
 function drawHands(hands) {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   const locked = game.lockProgress() > 0.05;
+  ctx.lineCap = "round";
   for (const lm of hands) {
-    // mirror x to match the mirrored <video>
     const pts = lm.map((p) => [(1 - p.x) * canvas.width, p.y * canvas.height]);
-    ctx.strokeStyle = locked ? "#f4d03f" : "#34d058";
+    ctx.strokeStyle = locked ? "#fbbf24" : "#4ade80";
     ctx.lineWidth = 3;
     for (const [a, b] of HAND_CONNECTIONS) {
       ctx.beginPath();
@@ -232,6 +264,7 @@ function render() {
     game.phase === "intro" || game.phase === "done"
       ? "Hand Quiz"
       : `Q ${Math.min(game.index + 1, total)}/${total}`;
+  $("quizProgressFill").style.width = `${Math.round((game.index / total) * 100)}%`;
 
   $("viewIntro").classList.toggle("hidden", game.phase !== "intro");
   $("viewQuestion").classList.toggle("hidden", game.phase !== "question");
@@ -293,5 +326,6 @@ function render() {
   if (game.phase === "done") {
     const pct = Math.round((100 * game.score) / total);
     $("finalScore").textContent = `${game.score} / ${total} correct (${pct}%)`;
+    $("quizProgressFill").style.width = "100%";
   }
 }

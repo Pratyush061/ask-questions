@@ -1,14 +1,17 @@
 :root {
-  --bg1: #0b0f14;
-  --bg2: #1b2937;
-  --panel: rgba(255, 255, 255, 0.05);
-  --panel-border: rgba(255, 255, 255, 0.1);
-  --text: #eef2f6;
-  --dim: #94a3b3;
-  --green: #34d058;
-  --yellow: #f4d03f;
-  --red: #ff6b6b;
-  --radius: 16px;
+  --bg: #07090f;
+  --text: #f2f5fa;
+  --dim: #8b93a7;
+  --glass: rgba(255, 255, 255, 0.055);
+  --border: rgba(255, 255, 255, 0.12);
+  --cyan: #22d3ee;
+  --violet: #a78bfa;
+  --green: #4ade80;
+  --yellow: #fbbf24;
+  --red: #fb7185;
+  --grad: linear-gradient(90deg, var(--cyan), var(--violet));
+  --radius: 20px;
+  --font: "Outfit", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 
 * { box-sizing: border-box; }
@@ -16,17 +19,46 @@ html, body { height: 100%; }
 
 body {
   margin: 0;
-  background: radial-gradient(1200px 600px at 50% -10%, var(--bg2) 0%, var(--bg1) 60%);
+  background: var(--bg);
   color: var(--text);
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-family: var(--font);
   display: flex;
   flex-direction: column;
   height: 100dvh;
   -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+/* soft aurora glow behind everything */
+body::before,
+body::after {
+  content: "";
+  position: fixed;
+  border-radius: 50%;
+  filter: blur(90px);
+  opacity: 0.16;
+  pointer-events: none;
+  z-index: 0;
+}
+body::before {
+  width: 60vmax; height: 60vmax;
+  top: -25vmax; left: -20vmax;
+  background: radial-gradient(circle, var(--cyan), transparent 65%);
+}
+body::after {
+  width: 55vmax; height: 55vmax;
+  bottom: -25vmax; right: -18vmax;
+  background: radial-gradient(circle, var(--violet), transparent 65%);
 }
 
 .hidden { display: none !important; }
 .dim { color: var(--dim); }
+.accent {
+  background: var(--grad);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
 
 /* ---------- HUD ---------- */
 #hud {
@@ -34,22 +66,41 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 10px 12px;
+  padding: 10px 14px;
   padding-top: calc(10px + env(safe-area-inset-top));
+  position: relative;
+  z-index: 1;
 }
 
 .chip {
-  background: var(--panel);
-  border: 1px solid var(--panel-border);
+  background: var(--glass);
+  border: 1px solid var(--border);
   border-radius: 999px;
   padding: 6px 14px;
   font-size: 0.85rem;
   font-weight: 600;
   white-space: nowrap;
+  backdrop-filter: blur(8px);
 }
 
-button.chip { color: var(--text); cursor: pointer; }
+.chip.logo { color: var(--dim); font-weight: 800; }
+
+button.chip { color: var(--text); cursor: pointer; transition: background 120ms; }
 button.chip:hover { background: rgba(255, 255, 255, 0.12); }
+
+#quizProgress {
+  height: 3px;
+  background: rgba(255, 255, 255, 0.07);
+  position: relative;
+  z-index: 1;
+}
+
+#quizProgressFill {
+  height: 100%;
+  width: 0%;
+  background: var(--grad);
+  transition: width 300ms ease;
+}
 
 /* ---------- layout: video on top, panel below (mobile-first) ---------- */
 #wrap {
@@ -61,7 +112,9 @@ button.chip:hover { background: rgba(255, 255, 255, 0.12); }
   width: 100%;
   max-width: 1100px;
   margin: 0 auto;
-  padding: 0 12px calc(10px + env(safe-area-inset-bottom));
+  padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+  position: relative;
+  z-index: 1;
 }
 
 #stage {
@@ -71,10 +124,10 @@ button.chip:hover { background: rgba(255, 255, 255, 0.12); }
   background: #000;
   border-radius: var(--radius);
   overflow: hidden;
-  border: 1px solid var(--panel-border);
+  border: 1px solid var(--border);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
 }
 
-/* the video letterboxes itself; JS positions the canvas on top of it */
 #cam {
   position: absolute;
   inset: 0;
@@ -86,21 +139,38 @@ button.chip:hover { background: rgba(255, 255, 255, 0.12); }
 
 #overlay { position: absolute; }
 
+#gestureChip {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 7;
+  font-size: 0.95rem;
+}
+
 /* ---------- quiz panel ---------- */
 #panel {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  background: var(--panel);
-  border: 1px solid var(--panel-border);
+  background: var(--glass);
+  border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 14px 16px;
   text-align: center;
+  backdrop-filter: blur(10px);
+  scrollbar-width: thin;
 }
 
-.view h1 { margin: 6px 0 8px; font-size: 1.3rem; }
-.view h2 { margin: 4px 0 10px; font-size: 1.05rem; }
-.view p { margin: 6px 0; line-height: 1.45; }
+.view { animation: fadeUp 260ms ease both; }
+
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+
+.view h1 { margin: 6px 0 8px; font-size: 1.4rem; font-weight: 800; letter-spacing: 0.2px; }
+.view h2 { margin: 4px 0 12px; font-size: 1.1rem; font-weight: 800; }
+.view p { margin: 6px 0; line-height: 1.5; }
 
 #options {
   list-style: none;
@@ -115,38 +185,41 @@ button.chip:hover { background: rgba(255, 255, 255, 0.12); }
 #options li {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  border-radius: 10px;
-  border: 1px solid var(--panel-border);
+  gap: 12px;
+  padding: 11px 14px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
   background: rgba(255, 255, 255, 0.04);
-  transition: background 120ms, border-color 120ms;
+  transition: background 130ms, border-color 130ms, transform 130ms;
 }
 
 #options li.active {
-  background: rgba(52, 208, 88, 0.16);
+  background: rgba(74, 222, 128, 0.14);
   border-color: var(--green);
+  transform: translateX(4px);
 }
 
 #options .num {
-  width: 24px;
-  height: 24px;
+  width: 26px;
+  height: 26px;
   flex: none;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: #24303d;
+  background: var(--grad);
   border-radius: 50%;
   font-size: 0.85rem;
-  font-weight: 700;
+  font-weight: 800;
+  color: #07090f;
 }
 
-#options .tally { color: var(--green); letter-spacing: 3px; flex: none; }
+#options .tally { color: var(--green); letter-spacing: 3px; flex: none; font-weight: 800; }
 
+/* ---------- progress bar ---------- */
 .bar {
-  height: 10px;
+  height: 12px;
   max-width: 420px;
-  margin: 10px auto 4px;
+  margin: 12px auto 4px;
   background: rgba(255, 255, 255, 0.08);
   border-radius: 999px;
   overflow: hidden;
@@ -157,8 +230,21 @@ button.chip:hover { background: rgba(255, 255, 255, 0.12); }
   width: 0%;
   background: linear-gradient(90deg, var(--yellow), var(--green));
   border-radius: 999px;
-  transition: width 80ms linear;
+  transition: width 90ms linear;
+  position: relative;
 }
+
+/* moving shine on the fill */
+.bar > div::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(105deg, transparent 40%, rgba(255, 255, 255, 0.35) 50%, transparent 60%);
+  background-size: 200% 100%;
+  animation: shine 1.6s linear infinite;
+}
+
+@keyframes shine { to { background-position: -200% 0; } }
 
 /* ---------- start button ---------- */
 #startBtn {
@@ -170,21 +256,27 @@ button.chip:hover { background: rgba(255, 255, 255, 0.12); }
   flex-direction: column;
   align-items: center;
   gap: 8px;
-  padding: 18px 34px;
+  padding: 20px 40px;
   border: none;
-  border-radius: 20px;
+  border-radius: 22px;
   cursor: pointer;
-  background: linear-gradient(135deg, #2ea44f, #1a7f37);
-  color: #fff;
+  background: linear-gradient(135deg, #22d3ee, #a78bfa);
+  color: #07090f;
   font-size: 1.05rem;
-  font-weight: 700;
+  font-weight: 800;
   z-index: 10;
-  box-shadow: 0 10px 30px rgba(46, 164, 79, 0.4);
+  box-shadow: 0 14px 44px rgba(94, 168, 250, 0.35);
+  animation: pulse 2.2s ease-in-out infinite;
 }
 
-#startBtn .big { font-size: 2rem; }
-#startBtn:disabled { opacity: 0.6; cursor: wait; }
-#startBtn:hover:not(:disabled) { filter: brightness(1.08); }
+@keyframes pulse {
+  0%, 100% { box-shadow: 0 14px 44px rgba(94, 168, 250, 0.30); }
+  50% { box-shadow: 0 14px 60px rgba(94, 168, 250, 0.55); }
+}
+
+#startBtn .big { font-size: 2.1rem; }
+#startBtn:disabled { opacity: 0.6; cursor: wait; animation: none; }
+#startBtn:hover:not(:disabled) { filter: brightness(1.1); }
 
 #status {
   position: absolute;
@@ -209,17 +301,18 @@ button.chip:hover { background: rgba(255, 255, 255, 0.12); }
   align-items: center;
   justify-content: center;
   gap: 12px;
-  background: rgba(0, 0, 0, 0.55);
+  background: rgba(7, 9, 15, 0.62);
+  backdrop-filter: blur(4px);
   z-index: 9;
 }
 
 .spinner {
-  width: 42px;
-  height: 42px;
+  width: 44px;
+  height: 44px;
   border-radius: 50%;
-  border: 4px solid rgba(255, 255, 255, 0.15);
-  border-top-color: var(--green);
-  animation: spin 800ms linear infinite;
+  border: 4px solid rgba(255, 255, 255, 0.14);
+  border-top-color: var(--cyan);
+  animation: spin 700ms linear infinite;
 }
 
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -234,25 +327,33 @@ button.chip:hover { background: rgba(255, 255, 255, 0.12); }
   justify-content: center;
   z-index: 8;
   pointer-events: none;
-  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.7);
+  text-shadow: 0 2px 14px rgba(0, 0, 0, 0.75);
 }
 
-#feedback.correct { background: rgba(23, 92, 30, 0.55); }
-#feedback.wrong { background: rgba(150, 30, 30, 0.5); }
+#feedback.correct { background: rgba(22, 101, 52, 0.55); }
+#feedback.wrong { background: rgba(136, 19, 55, 0.5); }
 
-#feedbackEmoji { font-size: clamp(2.5rem, 10vw, 4rem); }
+#feedbackEmoji { font-size: clamp(2.5rem, 10vw, 4rem); animation: pop 340ms cubic-bezier(0.34, 1.56, 0.64, 1) both; }
 #feedbackText {
   font-size: clamp(1.3rem, 6vw, 2.2rem);
   font-weight: 800;
   letter-spacing: 3px;
+  animation: pop 340ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
 }
 #feedbackSub { font-size: 0.95rem; }
+
+@keyframes pop {
+  from { transform: scale(0.55); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
 
 footer {
   text-align: center;
   color: var(--dim);
-  font-size: 0.75rem;
+  font-size: 0.72rem;
   padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
+  position: relative;
+  z-index: 1;
 }
 
 /* ---------- wide / landscape screens: video and panel side by side ---------- */
@@ -260,4 +361,11 @@ footer {
   #wrap { flex-direction: row; align-items: stretch; }
   #stage { flex: 1; aspect-ratio: auto; min-width: 0; }
   #panel { width: 380px; flex: none; }
+}
+
+/* respect users who prefer less motion */
+@media (prefers-reduced-motion: reduce) {
+  .view, #feedbackEmoji, #feedbackText { animation: none; }
+  .bar > div::after { animation: none; }
+  #startBtn { animation: none; }
 }
