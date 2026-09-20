@@ -22,15 +22,18 @@ fruit to score. No timer, no losing — just relaxing fruit cutting.
 ## How it works
 
 1. **Hand tracking** — MediaPipe's HandLandmarker (VIDEO mode, one hand,
-   640×480 detection frames, WebGL delegate with CPU fallback) returns 21
-   landmarks per hand.
+   480×360 detection frames for fast inference, WebGL delegate with CPU
+   fallback) returns 21 landmarks per hand. Detection runs in its own loop
+   that yields a frame between detections, so a slow inference call never
+   drags the rendering below 60fps, and the model is warmed up once at
+   startup so the first cut isn't fighting shader compilation.
 2. **Blade** — the segment from the wrist to the pinky knuckle. A fruit is
    cut when the blade segment (or the path its midpoint swept this frame)
    touches the fruit while moving faster than the slice threshold — so a
    still hand never slices, and fast swipes never "tunnel" through fruit.
-3. **Physics** — fruits fall with gentle gravity, drift sideways, bounce off
-   the side walls and spin. Halves and juice particles fly apart from the
-   cut line.
+3. **Physics** — fruits fall with gentle gravity (tuned so a real hand can
+   comfortably outrun them), drift sideways, bounce off the side walls and
+   spin. Halves and juice particles fly apart from the cut line.
 4. All game logic (geometry, physics, combos, spawning) is pure and lives in
    `logic.mjs` — unit-tested with plain Node.
 
