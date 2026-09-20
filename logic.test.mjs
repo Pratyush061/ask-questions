@@ -3,9 +3,9 @@
 
 import assert from "node:assert/strict";
 import {
-  Fruit, spawnFruit, Blade, ComboTracker,
+  Fruit, spawnFruit, Blade, ComboTracker, OneEuro2,
   segCircleHit, pointSegDist,
-  GRAVITY, SLICE_SPEED, GOLDEN_CHANCE,
+  GRAVITY, SLICE_SPEED, GOLDEN_CHANCE, SLICE_WINDOW,
 } from "./logic.mjs";
 
 // ---- geometry ---------------------------------------------------------------
@@ -108,5 +108,41 @@ c4.registerCut(1000);
 assert.equal(c4.poll(2000), null);
 assert.ok(GOLDEN_CHANCE > 0 && GOLDEN_CHANCE < 0.5);
 console.log("combos: OK");
+
+// ---- one-euro smoothing ---------------------------------------------------------
+const oe = new OneEuro2();
+assert.deepEqual(oe.filter(5, 7, 0), { x: 5, y: 7 }); // first value passes through
+// jitter is smoothed away
+const j = new OneEuro2();
+j.filter(0, 0, 0);
+let out = { x: 0, y: 0 };
+for (let i = 1; i <= 40; i++) {
+  out = j.filter(i % 2 === 0 ? 3 : -3, 0, i * 33);
+}
+assert.ok(Math.abs(out.x) < 2, "jitter smoothed: " + out.x);
+// a fast jump passes through almost untouched
+const fj = new OneEuro2();
+fj.filter(0, 0, 0);
+const fastJump = fj.filter(1000, 0, 100);
+assert.ok(fastJump.x > 900, "fast movement follows: " + fastJump.x);
+console.log("one-euro filter: OK");
+
+// ---- multi-sample slice window -----------------------------------------------------
+// A fruit crossed mid-window during a fast swing is cut even when neither the
+// newest blade segment nor the newest step's sweep touches it.
+const sw = new Blade();
+sw.addSample(0, 200, 50, 250, 0);
+sw.addSample(70, 205, 120, 255, 50);   // fast right
+sw.addSample(140, 210, 190, 260, 100); // fast right
+sw.addSample(150, 212, 200, 262, 150); // decelerating
+const passed = new Fruit({ x: 105, y: 232, vx: 0, vy: 0, r: 20, size: 60,
+                           emoji: "🍇", juice: "#a0f", points: 10, spin: 0 });
+assert.equal(sw.cuts(passed), true, "fruit hit mid-window during swing is cut");
+// velocity() tracks the last motion
+const vel = sw.velocity();
+assert.ok(vel.vx > 0 && vel.vy < 100, "velocity tracks motion");
+// with old behaviour (only the newest sweep) the same fruit was missed
+assert.ok(SLICE_WINDOW >= 3, "window spans several samples");
+console.log("slice window: OK");
 
 console.log("\nAll logic tests passed.");

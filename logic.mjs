@@ -8,6 +8,8 @@
 export const GRAVITY = 45;          // px/s^2 — gentle, zen pace
 export const SLICE_SPEED = 150;     // px/s the blade must move before it cuts
 export const BLADE_WIDTH = 18;      // extra reach added to the fruit radius
+export const SLICE_WINDOW = 4;      // motion samples checked for a hit (bridges detection gaps)
+export const COAST_MS = 160;        // how long the blade keeps gliding through a tracking dropout
 export const COMBO_WINDOW_MS = 260; // cuts within this window chain together
 export const COMBO_BONUS_PER = 5;   // bonus points per fruit in a combo
 export const NORMAL_POINTS = 10;
@@ -124,15 +126,44 @@ export class Blade {
     return Math.hypot(b.mx - a.mx, b.my - a.my) / dt;
   }
 
+  /** Blade velocity in px/s, from the last two samples. */
+  velocity() {
+    const n = this.samples.length;
+    if (n < 2) return { vx: 0, vy: 0 };
+    const a = this.samples[n - 2];
+    const b = this.samples[n - 1];
+    const dt = (b.t - a.t) / 1000;
+    if (dt <= 0) return { vx: 0, vy: 0 };
+    return { vx: (b.mx - a.mx) / dt, vy: (b.my - a.my) / dt };
+  }
+
   cuts(fruit) {
-    if (this.samples.length < 2) return false;
-    if (this.speed() < SLICE_SPEED) return false;
-    const p = this.samples[this.samples.length - 2];
-    const c = this.samples[this.samples.length - 1];
-    return (
-      segCircleHit(c.ax, c.ay, c.bx, c.by, fruit.x, fruit.y, fruit.r + BLADE_WIDTH) ||
-      segCircleHit(p.mx, p.my, c.mx, c.my, fruit.x, fruit.y, fruit.r)
-    );
+    const n = this.samples.length;
+    if (n < 2) return false;
+    // A swing anywhere in the last SLICE_WINDOW samples counts: fast chops
+    // often outpace the camera for a frame or two, so the blade's swept path
+    // over the whole window is checked, not just the newest step.
+    const start = Math.max(1, n - SLICE_WINDOW);
+    let fast = false;
+    for (let i = start; i < n; i++) {
+      const a = this.samples[i - 1];
+      const b = this.samples[i];
+      const dt = (b.t - a.t) / 1000;
+      if (dt > 0 && Math.hypot(b.mx - a.mx, b.my - a.my) / dt >= SLICE_SPEED) {
+        fast = true;
+        break;
+      }
+    }
+    if (!fast) return false;
+    const r = fruit.r + BLADE_WIDTH;
+    const c = this.samples[n - 1];
+    if (segCircleHit(c.ax, c.ay, c.bx, c.by, fruit.x, fruit.y, r)) return true;
+    for (let i = start; i < n; i++) {
+      const a = this.samples[i - 1];
+      const b = this.samples[i];
+      if (segCircleHit(a.mx, a.my, b.mx, b.my, fruit.x, fruit.y, r)) return true;
+    }
+    return false;
   }
 
   /** Direction the blade midpoint is moving in, in radians (last motion). */
@@ -149,7 +180,54 @@ export class Blade {
   }
 }
 
-// ---- combos ------------------------------------------------------------------
+// ---- signal smoothing ---------------------------------------------------------
+/* One-Euro filter (1€ filter) for the blade landmarks: strongly smooths slow
+   jitter, but passes fast swings through almost untouched — so the blade is
+   rock-steady when still yet never lags behind a chop. */
+export class OneEuro2 {
+  constructor({ minCutoff = 1.2, beta = 0.03, dCutoff = 1.0 } = {}) {
+    this.minCutoff = minCutoff;
+    this.beta = beta;
+    this.dCutoff = dCutoff;
+    this.fx = null;
+    this.fy = null;
+    this.dx = 0;
+    this.dy = 0;
+    this.prevX = null;
+    this.prevY = null;
+    this.prevT = null;
+  }
+
+  static alpha(cutoff, dt) {
+    const tau = 1 / (2 * Math.PI * cutoff);
+    return 1 / (1 + tau / dt);
+  }
+
+  filter(x, y, t) {
+    if (this.prevT === null) {
+      this.fx = x;
+      this.fy = y;
+      this.prevX = x;
+      this.prevY = y;
+      this.prevT = t;
+      return { x, y };
+    }
+    const dt = Math.max(1e-3, (t - this.prevT) / 1000);
+    const ad = OneEuro2.alpha(this.dCutoff, dt);
+    const edx = (x - this.prevX) / dt;
+    const edy = (y - this.prevY) / dt;
+    this.dx += ad * (edx - this.dx);
+    this.dy += ad * (edy - this.dy);
+    const cutoff = this.minCutoff + this.beta * Math.hypot(this.dx, this.dy);
+    const a = OneEuro2.alpha(cutoff, dt);
+    this.fx += a * (x - this.fx);
+    this.fy += a * (y - this.fy);
+    this.prevX = x;
+    this.prevY = y;
+    this.prevT = t;
+    return { x: this.fx, y: this.fy };
+  }
+}
 export class ComboTracker {
   constructor(windowMs = COMBO_WINDOW_MS) {
     this.windowMs = windowMs;
