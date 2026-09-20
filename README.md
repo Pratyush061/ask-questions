@@ -21,26 +21,32 @@ fruit to score. No timer, no losing — just relaxing fruit cutting.
 
 ## How it works
 
-1. **Hand tracking** — MediaPipe's HandLandmarker (VIDEO mode, one hand,
-   WebGL delegate with CPU fallback). Inference runs on a downscaled
-   offscreen copy of the camera frame, in its own loop that yields between
-   detections, so rendering never drops below 60fps; the model is warmed up
-   once at startup. Tracking thresholds are relaxed (0.4 instead of the
+1. **Hand tracking** — MediaPipe's HandLandmarker (VIDEO mode, one hand)
+   runs in a **Web Worker** on its own thread (`detector.worker.js`), so
+   heavy rendering can never starve detection: the main thread renders at
+   60fps while the worker owns the model and infers on every frame it is
+   sent (exactly one frame in flight — always busy, never a queue). If the
+   worker cannot run, the game falls back to a yielding main-thread loop
+   that loads the model lazily. Inference runs on a downscaled offscreen
+   copy of the frame. Tracking thresholds are relaxed (0.4 instead of the
    default 0.5) so fast chops with motion blur keep the light tracker
    engaged instead of falling back to slow re-detection, and landmarks
    pass through a One-Euro filter — steady when the hand is still,
    essentially no lag when it swings.
-2. **Blade** — the segment from the wrist to the pinky knuckle. During the
-   brief dropouts of a fast swing the blade *coasts*: it keeps gliding in
-   its last direction with decaying speed for up to 160 ms instead of
-   blinking out, so a chop that outpaces the camera still lands. A fruit
-   is cut when the blade segment, or its swept path over the last few
-   motion samples, touches the fruit while moving faster than the slice
-   threshold.
-3. **Physics** — fruits fall with gentle gravity (tuned so a real hand can
+2. **Blade** — the segment from the wrist to the pinky knuckle, extended
+   30% past both ends so grazes still cut. During the brief dropouts of a
+   fast swing the blade *coasts*: it keeps gliding in its last direction
+   with decaying speed for up to 160 ms instead of blinking out, so a chop
+   that outpaces the camera still lands. A fruit is cut when the blade
+   segment, or its swept path over the last few motion samples, touches the
+   fruit while moving faster than the slice threshold.
+3. **Rendering** — fruits and halves are pre-rendered into cached sprites
+   (emoji + glow drawn once) and blitted with drawImage; per-frame
+   shadowBlur — the most expensive canvas operation — is gone entirely.
+4. **Physics** — fruits fall with gentle gravity (tuned so a real hand can
    comfortably outrun them), drift sideways, bounce off the side walls and
    spin. Halves and juice particles fly apart from the cut line.
-4. All game logic (geometry, physics, combos, spawning) is pure and lives in
+5. All game logic (geometry, physics, combos, spawning) is pure and lives in
    `logic.mjs` — unit-tested with plain Node.
 
 ## Run locally
@@ -64,17 +70,21 @@ wizard asks for a framework preset, choose **Other**.
 ## Tests (no camera / browser needed)
 
 ```bash
-node logic.test.mjs   # geometry, physics, blade slicing, combos, spawning
+node logic.test.mjs   # geometry, physics, blade slicing, combos, filters
+node e2e.test.mjs    # full-pipeline simulation: spawn -> detection (with
+                     # dropouts) -> smoothing -> coasting -> cuts -> combos
 ```
 
 ## Repository layout
 
 ```
-├── index.html      # page + HUD
-├── game.js          # camera, MediaPipe tracking, rendering, sound, particles
-├── logic.mjs        # pure game logic: physics, slicing geometry, combos
-├── logic.test.mjs   # Node tests for the logic
-└── style.css        # dark zen theme
+├── index.html          # page + HUD
+├── game.js             # camera, worker plumbing, rendering, sound, particles
+├── detector.worker.js  # MediaPipe hand tracking on its own thread
+├── logic.mjs           # pure game logic: physics, slicing geometry, combos
+├── logic.test.mjs      # Node unit tests for the logic
+├── e2e.test.mjs        # headless full-pipeline simulation
+└── style.css           # dark zen theme
 ```
 
 ## License
