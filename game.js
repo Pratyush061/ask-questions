@@ -31,9 +31,9 @@ const CAM_HEIGHT = 360;
 const DETECT_WIDTH = 288;
 const DETECT_HEIGHT = 216;
 
-const SPAWN_MIN = 0.55;  // seconds between spawn waves (more fruit in play...)
-const SPAWN_MAX = 1.5;   // (...but they fall slower, so it stays catchable)
-const BURST_CHANCE = 0.3; // chance a wave drops 2-3 fruits at once
+const SPAWN_MIN = 1.0;  // seconds between spawn waves (more fruit in play...)
+const SPAWN_MAX = 2.5;   // (...but they fall slower, so it stays catchable)
+const BURST_CHANCE = 0.1; // chance a wave drops 2-3 fruits at once
 
 // ---- DOM --------------------------------------------------------------------
 const $ = (id) => document.getElementById(id);
@@ -256,6 +256,7 @@ async function start() {
 
     sfx.init();
 
+    showLoading(false);
     btn.classList.add("hidden");
     setStatus("");
     $("hint").classList.remove("hidden");
@@ -431,18 +432,13 @@ function startDetector() {
     };
     detector.onerror = () => fallbackToMainThread();
     detectionMode = "worker";
-    // If nothing comes back in time (blocked workers, broken CDN import,
-    // very slow network), quietly fall back to main-thread detection.
-    setTimeout(() => {
-      if (detectionMode === "worker" && !firstResultSeen) fallbackToMainThread();
-    }, 6000);
   } catch (err) {
     fallbackToMainThread();
   }
 }
 
 function fallbackToMainThread() {
-  if (detectionMode !== "worker") return; // never started, or already on main
+  if (detectionMode === "main") return; // never started, or already on main
   detectionMode = "main";
   try { detector && detector.terminate(); } catch (e) { /* ignore */ }
   detector = null;
@@ -516,6 +512,7 @@ async function detectLoop() {
 // ---- main loop: physics + rendering only --------------------------------------------
 function loop(now) {
   if (!running) return;
+  if (!lastT) lastT = now; // Defensively initialize to avoid massive first-frame delta
   pumpWorker();
   const dt = Math.min(0.05, (now - lastT) / 1000);
   lastT = now;
@@ -649,7 +646,9 @@ function render() {
   ctx.save();
   ctx.translate(W, 0);
   ctx.scale(-1, 1);
-  ctx.drawImage(video, 0, 0, W, H);
+  if (video.readyState >= 2) {
+    ctx.drawImage(video, 0, 0, W, H);
+  }
   ctx.restore();
   ctx.fillStyle = "rgba(8, 10, 24, 0.45)";
   ctx.fillRect(0, 0, W, H);

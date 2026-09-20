@@ -5,7 +5,7 @@
    slices them with the edge of their hand (wrist -> pinky knuckle). */
 
 // ---- tuning ----------------------------------------------------------------
-export const GRAVITY = 45;          // px/s^2 — gentle, zen pace
+export const GRAVITY = 35;          // px/s^2 — gentle, zen pace
 export const SLICE_SPEED = 150;     // px/s the blade must move before it cuts
 export const BLADE_WIDTH = 18;      // extra reach added to the fruit radius
 export const BLADE_EXTEND = 0.3;    // blade segment extended past wrist/pinky by this fraction of its length
