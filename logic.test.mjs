@@ -1,0 +1,112 @@
+/* Headless tests for the pure game logic (no browser / camera needed).
+   Run:  node logic.test.mjs */
+
+import assert from "node:assert/strict";
+import {
+  Fruit, spawnFruit, Blade, ComboTracker,
+  segCircleHit, pointSegDist,
+  GRAVITY, SLICE_SPEED, GOLDEN_CHANCE,
+} from "./logic.mjs";
+
+// ---- geometry ---------------------------------------------------------------
+assert.equal(pointSegDist(5, 0, 0, 0, 10, 0), 0);           // point on segment
+assert.equal(pointSegDist(0, 5, 0, 0, 10, 0), 5);           // perpendicular, endpoint nearest
+assert.equal(pointSegDist(-3, 0, 0, 0, 10, 0), 3);          // before segment
+assert.equal(pointSegDist(13, 0, 0, 0, 10, 0), 3);          // after segment
+assert.equal(pointSegDist(5, 4, 0, 0, 10, 0), 4);           // perpendicular
+assert.equal(pointSegDist(3, 3, 3, 3, 3, 3), Math.hypot(0, 0)); // degenerate segment
+
+assert.equal(segCircleHit(0, 0, 10, 0, 5, 0, 1), true);    // through center
+assert.equal(segCircleHit(0, 0, 10, 0, 5, 5, 2), false);    // too far
+assert.equal(segCircleHit(0, 0, 10, 0, 5, 2.5, 3), true);   // grazing
+console.log("geometry: OK");
+
+// ---- fruit physics ------------------------------------------------------------
+const f = new Fruit({ x: 100, y: 0, vx: 10, vy: 0, r: 40, size: 90,
+                     emoji: "🍎", juice: "#f00", points: 10, spin: 2 });
+f.update(0.5, 640, 480);
+assert.ok(Math.abs(f.vy - GRAVITY * 0.5) < 1e-9, "gravity applied");
+assert.equal(f.x, 105);                     // vx * dt
+assert.ok(f.y > 0);
+assert.ok(f.angle > 0);                     // spun
+// falls off the bottom -> dead (zen: no penalty, just gone)
+const g = new Fruit({ x: 100, y: 470, vx: 0, vy: 100, r: 40, size: 90,
+                      emoji: "🍎", juice: "#f00", points: 10, spin: 0 });
+g.update(1, 640, 480);
+assert.equal(g.dead, true);
+// bounces off the side walls
+const s = new Fruit({ x: 5, y: 100, vx: -100, vy: 0, r: 40, size: 90,
+                      emoji: "🍎", juice: "#f00", points: 10, spin: 0 });
+s.update(0.1, 640, 480);
+assert.ok(s.x >= s.r && s.vx > 0, "wall bounce");
+console.log("fruit physics: OK");
+
+// ---- spawning ------------------------------------------------------------------
+// deterministic rng: 0 -> first fruit, never golden (0 < 0.07 except first draw)
+const rng = () => 0.5;
+const a = spawnFruit(640, rng);
+assert.ok(a.y <= 0 && a.y + a.size <= 0, "spawns above the screen");
+assert.ok(a.x >= 40 && a.x <= 600, "spawns within x bounds");
+assert.equal(a.golden, false);
+assert.equal(a.points, 10);
+const goldenRng = () => 0.001; // first call picks fruit, second < GOLDEN_CHANCE
+const gold = spawnFruit(640, goldenRng);
+assert.equal(gold.golden, true);
+assert.equal(gold.points, 50);
+assert.equal(gold.juice, "#ffd700");
+// every fruit type has a consistent config
+console.log("spawn: OK");
+
+// ---- blade slicing ----------------------------------------------------------------
+// A fast-moving blade cuts a fruit lying on the blade segment
+const blade = new Blade();
+blade.addSample(100, 100, 100, 200, 0);
+blade.addSample(300, 100, 300, 200, 100); // moved 200px in 100ms = 2000px/s
+const onPath = new Fruit({ x: 300, y: 150, vx: 0, vy: 0, r: 30, size: 70,
+                           emoji: "🍊", juice: "#fa0", points: 10, spin: 0 });
+assert.equal(blade.cuts(onPath), true, "fast blade on segment cuts");
+
+// A stationary hand never cuts (speed gate)
+const slow = new Blade();
+slow.addSample(300, 100, 300, 200, 0);
+slow.addSample(305, 100, 305, 200, 100); // 50px/s — way below SLICE_SPEED
+assert.equal(slow.cuts(onPath), false, "slow hand does not cut");
+
+// A fruit between the previous and current blade position (swept path) is cut
+const swept = new Blade();
+swept.addSample(100, 400, 150, 450, 0);
+swept.addSample(500, 410, 550, 460, 100); // swept across the screen
+const midAir = new Fruit({ x: 300, y: 430, vx: 0, vy: 0, r: 20, size: 60,
+                           emoji: "🍇", juice: "#a0f", points: 10, spin: 0 });
+assert.equal(swept.cuts(midAir), true, "swept path catches fast swipes");
+
+// A fruit far away is never cut, however fast
+const farAway = new Fruit({ x: 300, y: 100, vx: 0, vy: 0, r: 30, size: 70,
+                            emoji: "🍍", juice: "#fb0", points: 10, spin: 0 });
+assert.equal(swept.cuts(farAway), false);
+
+// blade angle reflects motion direction
+assert.ok(Math.abs(blade.angle() - 0) < 1e-6, "moving right -> angle 0");
+console.log("blade: OK");
+
+// ---- combos -----------------------------------------------------------------------
+const combo = new ComboTracker();
+combo.registerCut(0);
+combo.registerCut(100);
+combo.registerCut(220); // 3 fruits in one swing
+assert.equal(combo.poll(400), null);      // 400-220 = 180ms: window still open
+assert.deepEqual(combo.poll(600), { count: 3, bonus: 15 }); // 380ms later: chain closes
+assert.equal(combo.poll(700), null);      // already consumed
+// a single fruit is not a combo
+const c3 = new ComboTracker();
+c3.registerCut(0);
+assert.equal(c3.poll(1000), null);
+// cuts separated by more than the window do not chain
+const c4 = new ComboTracker();
+c4.registerCut(0);
+c4.registerCut(1000);
+assert.equal(c4.poll(2000), null);
+assert.ok(GOLDEN_CHANCE > 0 && GOLDEN_CHANCE < 0.5);
+console.log("combos: OK");
+
+console.log("\nAll logic tests passed.");
