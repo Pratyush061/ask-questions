@@ -71,6 +71,16 @@ const detectCtx = detectCanvas.getContext("2d");
 const wristFilter = new OneEuro2();
 const pinkyFilter = new OneEuro2();
 
+// ---- detection worker -----------------------------------------------------------
+// MediaPipe runs in a Web Worker on its own thread: no matter how heavy the
+// fruit/particle rendering gets, detection keeps its own budget and never
+// starves. If the worker cannot start or keeps failing, we fall back to the
+// main-thread detection loop, which loads the model lazily.
+let detector = null;
+let detectionMode = "none"; // "none" | "worker" | "main"
+let frameInFlight = false;
+let firstResultSeen = false;
+
 const sfx = {
   ctx: null,
   enabled: true,
@@ -184,10 +194,18 @@ async function createLandmarker() {
 }
 
 let modelError = null;
-const modelPromise = createLandmarker().catch((err) => {
-  modelError = err;
-  return null;
-});
+let modelPromise = null;
+/* The main-thread model is only created if the detection worker has to fall
+   back; the worker loads its own copy. */
+function getModel() {
+  if (!modelPromise) {
+    modelPromise = createLandmarker().catch((err) => {
+      modelError = err;
+      return null;
+    });
+  }
+  return modelPromise;
+}
 
 async function openCamera() {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -236,22 +254,7 @@ async function start() {
     stage.style.aspectRatio = `${video.videoWidth} / ${video.videoHeight}`;
     layoutCanvas();
 
-    showLoading(true, "Loading hand-tracking model…");
-    landmarker = await modelPromise;
-    if (!landmarker) throw modelError || new Error("Model failed to load");
-    showLoading(false);
-
     sfx.init();
-
-    // Warm up the model once now, while the loading overlay is still up:
-    // the first detectForVideo call compiles GPU shaders and is much slower
-    // than every call after it. Doing it here means the first real cut isn't
-    // fighting a cold model.
-    try {
-      detectCtx.drawImage(video, 0, 0, DETECT_WIDTH, DETECT_HEIGHT);
-      landmarker.detectForVideo(detectCanvas, performance.now());
-      lastVideoTime = video.currentTime;
-    } catch (err) { /* warm-up failure is not fatal */ }
 
     btn.classList.add("hidden");
     setStatus("");
@@ -259,7 +262,10 @@ async function start() {
     running = true;
     lastT = performance.now();
     requestAnimationFrame(loop);
-    detectLoop();
+    // Detection prefers the worker (it loads the model itself and warms up
+    // on the first frame it receives); if the worker cannot run, it falls
+    // back to the main-thread loop, which loads the model lazily.
+    startDetector();
   } catch (err) {
     console.error(err);
     showLoading(false);
@@ -358,66 +364,142 @@ function cutFruit(f) {
   }
 }
 
-/* ---- detection loop ---------------------------------------------------------
-   Tracking runs in its OWN async loop that yields a frame between detections.
-   detectForVideo() is synchronous and blocks the main thread while it runs,
-   so if it happens inside the render loop it drags the whole game below
-   60fps and cuts feel late. Decoupled like this, rendering stays smooth and
-   only the blade updates at detection speed. */
+/* Shared handling of one detection result, whether it came from the worker
+   or the main-thread fallback. `hand` is the array of normalized landmarks
+   (or null), `now` the timestamp the frame was captured. */
+function handleLandmarks(hand, now) {
+  if (hand && hand.length) {
+    const W = canvas.width;
+    const H = canvas.height;
+    // blade = wrist (0) -> pinky knuckle (17), mirrored to screen space
+    // and smoothed with a One-Euro filter: steady when the hand is
+    // still, essentially no lag when it swings
+    const wr = wristFilter.filter((1 - hand[0].x) * W, hand[0].y * H, now);
+    const pk = pinkyFilter.filter((1 - hand[17].x) * W, hand[17].y * H, now);
+    blade.addSample(wr.x, wr.y, pk.x, pk.y, now);
+    handSeen = true;
+    lastHandT = now;
+  } else if (now - lastHandT < COAST_MS) {
+    // Tracking dropout during a swing: coast. The blade keeps gliding
+    // in its last direction with decaying speed instead of blinking
+    // out, so a chop that briefly outpaces the camera still lands.
+    const l = blade.last;
+    if (l) {
+      const v = blade.velocity();
+      const dt = (now - l.t) / 1000;
+      const decay = Math.exp(-dt / 0.08);
+      blade.addSample(
+        l.ax + v.vx * dt * decay, l.ay + v.vy * dt * decay,
+        l.bx + v.vx * dt * decay, l.by + v.vy * dt * decay,
+        now
+      );
+    }
+  } else {
+    blade.clear();
+    handSeen = false;
+  }
+  // Slice check runs on every fresh OR coasted sample: a swing that
+  // happens entirely inside a dropout still cuts through its path.
+  if (handSeen) {
+    const fast = blade.speed() >= SLICE_SPEED;
+    if (fast && !swooshWasFast && now - sfx.lastSwoosh > 220) {
+      sfx.swoosh();
+      sfx.lastSwoosh = now;
+    }
+    swooshWasFast = fast;
+    if (fast) {
+      for (const f of fruits) {
+        if (!f.dead && blade.cuts(f)) cutFruit(f);
+      }
+    }
+  }
+}
+
+function startDetector() {
+  try {
+    detector = new Worker("detector.worker.js", { type: "module" });
+    detector.onmessage = (ev) => {
+      const d = ev.data || {};
+      if (d.type !== "result") return;
+      frameInFlight = false;
+      firstResultSeen = true;
+      if (d.error && ++detectErrors > 10) {
+        fallbackToMainThread();
+        return;
+      }
+      handleLandmarks(d.hand, d.t ?? performance.now());
+    };
+    detector.onerror = () => fallbackToMainThread();
+    detectionMode = "worker";
+    // If nothing comes back in time (blocked workers, broken CDN import,
+    // very slow network), quietly fall back to main-thread detection.
+    setTimeout(() => {
+      if (detectionMode === "worker" && !firstResultSeen) fallbackToMainThread();
+    }, 6000);
+  } catch (err) {
+    fallbackToMainThread();
+  }
+}
+
+function fallbackToMainThread() {
+  if (detectionMode !== "worker") return; // never started, or already on main
+  detectionMode = "main";
+  try { detector && detector.terminate(); } catch (e) { /* ignore */ }
+  detector = null;
+  frameInFlight = false;
+  (async () => {
+    landmarker = await getModel();
+    if (!landmarker) {
+      setStatus("Tracking failed: " + (modelError && modelError.message ? modelError.message : "model failed to load"));
+      return;
+    }
+    // Warm up the model once: the first detectForVideo compiles GPU
+    // shaders and is much slower than every call after it.
+    try {
+      detectCtx.drawImage(video, 0, 0, DETECT_WIDTH, DETECT_HEIGHT);
+      landmarker.detectForVideo(detectCanvas, performance.now());
+      lastVideoTime = video.currentTime;
+    } catch (err) { /* warm-up failure is not fatal */ }
+    detectLoop();
+  })();
+}
+
+/* Pump one camera frame to the worker whenever it is idle: exactly one
+   frame in flight at a time means the worker is always busy but never
+   queues up, so detection latency stays minimal even under heavy load. */
+async function pumpWorker() {
+  if (detectionMode !== "worker" || frameInFlight) return;
+  if (video.readyState < 2 || video.currentTime === lastVideoTime) return;
+  const t = performance.now();
+  lastVideoTime = video.currentTime;
+  frameInFlight = true;
+  try {
+    const bmp = await createImageBitmap(video);
+    if (detectionMode !== "worker") { // fell back while we were capturing
+      bmp.close();
+      frameInFlight = false;
+      return;
+    }
+    detector.postMessage({ type: "frame", bitmap: bmp, t }, [bmp]);
+  } catch (err) {
+    frameInFlight = false;
+    if (++detectErrors > 10) fallbackToMainThread();
+  }
+}
+
+/* ---- main-thread detection fallback ---------------------------------------
+   Only used when the worker cannot run. Same shape as the worker path:
+   detectForVideo() is synchronous and blocks, so this loop yields a frame
+   between detections to let rendering breathe. */
 async function detectLoop() {
-  while (running) {
+  while (running && detectionMode === "main") {
     try {
       if (video.readyState >= 2 && video.currentTime !== lastVideoTime) {
         lastVideoTime = video.currentTime;
         const now = performance.now();
         detectCtx.drawImage(video, 0, 0, DETECT_WIDTH, DETECT_HEIGHT);
         const result = landmarker.detectForVideo(detectCanvas, now);
-        if (result.landmarks && result.landmarks.length) {
-          const lm = result.landmarks[0];
-          const W = canvas.width;
-          const H = canvas.height;
-          // blade = wrist (0) -> pinky knuckle (17), mirrored to screen space
-          // and smoothed with a One-Euro filter: steady when the hand is
-          // still, essentially no lag when it swings
-          const wr = wristFilter.filter((1 - lm[0].x) * W, lm[0].y * H, now);
-          const pk = pinkyFilter.filter((1 - lm[17].x) * W, lm[17].y * H, now);
-          blade.addSample(wr.x, wr.y, pk.x, pk.y, now);
-          handSeen = true;
-          lastHandT = now;
-        } else if (now - lastHandT < COAST_MS) {
-          // Tracking dropout during a swing: coast. The blade keeps gliding
-          // in its last direction with decaying speed instead of blinking
-          // out, so a chop that briefly outpaces the camera still lands.
-          const l = blade.last;
-          if (l) {
-            const v = blade.velocity();
-            const dt = (now - l.t) / 1000;
-            const decay = Math.exp(-dt / 0.08);
-            blade.addSample(
-              l.ax + v.vx * dt * decay, l.ay + v.vy * dt * decay,
-              l.bx + v.vx * dt * decay, l.by + v.vy * dt * decay,
-              now
-            );
-          }
-        } else {
-          blade.clear();
-          handSeen = false;
-        }
-        // Slice check runs on every fresh OR coasted sample: a swing that
-        // happens entirely inside a dropout still cuts through its path.
-        if (handSeen) {
-          const fast = blade.speed() >= SLICE_SPEED;
-          if (fast && !swooshWasFast && now - sfx.lastSwoosh > 220) {
-            sfx.swoosh();
-            sfx.lastSwoosh = now;
-          }
-          swooshWasFast = fast;
-          if (fast) {
-            for (const f of fruits) {
-              if (!f.dead && blade.cuts(f)) cutFruit(f);
-            }
-          }
-        }
+        handleLandmarks(result.landmarks && result.landmarks[0], now);
         detectErrors = 0;
       }
     } catch (err) {
@@ -434,6 +516,7 @@ async function detectLoop() {
 // ---- main loop: physics + rendering only --------------------------------------------
 function loop(now) {
   if (!running) return;
+  pumpWorker();
   const dt = Math.min(0.05, (now - lastT) / 1000);
   lastT = now;
   const W = canvas.width;
@@ -492,6 +575,71 @@ function loop(now) {
   requestAnimationFrame(loop);
 }
 
+// ---- sprite cache ---------------------------------------------------------------
+/* Fruits and halves are pre-rendered once (emoji + glow) into offscreen
+   canvases and then blitted with drawImage. The old code redrew every fruit
+   with shadowBlur — the most expensive canvas 2D operation — which stalled
+   the frame whenever several fruits were on screen and starved the
+   (then main-thread) detection loop. */
+const spriteCache = new Map();
+
+function spriteBucket(size) {
+  return Math.max(8, Math.round(size / 8) * 8);
+}
+
+function fruitSprite(emoji, size, golden) {
+  const s = spriteBucket(size);
+  const key = `f|${emoji}|${s}|${golden ? 1 : 0}`;
+  let c = spriteCache.get(key);
+  if (!c) {
+    const pad = Math.ceil(s * 0.4);
+    c = document.createElement("canvas");
+    c.width = s + pad * 2;
+    c.height = s + pad * 2;
+    const g = c.getContext("2d");
+    g.font = `${s}px serif`;
+    g.textAlign = "center";
+    g.textBaseline = "middle";
+    if (golden) {
+      g.shadowColor = "#ffd700";
+      g.shadowBlur = 30;
+    } else {
+      g.shadowColor = "rgba(0, 0, 0, 0.55)";
+      g.shadowBlur = 14;
+    }
+    g.fillText(emoji, c.width / 2, c.height / 2);
+    spriteCache.set(key, c);
+  }
+  return c;
+}
+
+function halfSprite(emoji, size, side) {
+  const s = spriteBucket(size);
+  const key = `h|${emoji}|${s}|${side < 0 ? 0 : 1}`;
+  let c = spriteCache.get(key);
+  if (!c) {
+    const pad = Math.ceil(s * 0.4);
+    c = document.createElement("canvas");
+    c.width = s + pad * 2;
+    c.height = s + pad * 2;
+    const g = c.getContext("2d");
+    g.font = `${s}px serif`;
+    g.textAlign = "center";
+    g.textBaseline = "middle";
+    g.shadowColor = "rgba(0,0,0,0.5)";
+    g.shadowBlur = 10;
+    g.save();
+    g.beginPath();
+    if (side < 0) g.rect(0, 0, c.width / 2, c.height);      // left half
+    else g.rect(c.width / 2, 0, c.width / 2, c.height);     // right half
+    g.clip();
+    g.fillText(emoji, c.width / 2, c.height / 2);
+    g.restore();
+    spriteCache.set(key, c);
+  }
+  return c;
+}
+
 // ---- rendering -----------------------------------------------------------------------
 function render() {
   const W = canvas.width;
@@ -545,22 +693,13 @@ function render() {
     ctx.restore();
   }
 
-  // fruits
+  // fruits (pre-rendered sprites — cheap blits, no per-frame shadowBlur)
   for (const f of fruits) {
+    const s = fruitSprite(f.emoji, f.size, f.golden);
     ctx.save();
     ctx.translate(f.x, f.y);
     ctx.rotate(f.angle);
-    if (f.golden) {
-      ctx.shadowColor = "#ffd700";
-      ctx.shadowBlur = 30;
-    } else {
-      ctx.shadowColor = "rgba(0, 0, 0, 0.55)";
-      ctx.shadowBlur = 14;
-    }
-    ctx.font = `${f.size}px serif`;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText(f.emoji, 0, 0);
+    ctx.drawImage(s, -s.width / 2, -s.height / 2);
     ctx.restore();
     if (f.golden) { // shimmering ring
       ctx.save();
@@ -575,23 +714,14 @@ function render() {
     }
   }
 
-  // sliced halves (each half is the emoji clipped along the cut line)
+  // sliced halves (pre-rendered half sprites, rotated per instance)
   for (const h of halves) {
+    const s = halfSprite(h.emoji, h.size, h.side);
     ctx.save();
     ctx.globalAlpha = Math.min(1, h.life / 0.5);
     ctx.translate(h.x, h.y);
     ctx.rotate(h.rot);
-    ctx.beginPath();
-    const s = h.size;
-    if (h.side < 0) ctx.rect(-s, -s, s, 2 * s); // left half
-    else ctx.rect(0, -s, s, 2 * s);              // right half
-    ctx.clip();
-    ctx.font = `${h.size}px serif`;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.shadowColor = "rgba(0,0,0,0.5)";
-    ctx.shadowBlur = 10;
-    ctx.fillText(h.emoji, 0, 0);
+    ctx.drawImage(s, -s.width / 2, -s.height / 2);
     ctx.restore();
   }
 
