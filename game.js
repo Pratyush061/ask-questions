@@ -19,12 +19,12 @@ const WASM_BASE =
 
 // ---- performance tuning ----------------------------------------------------
 const NUM_HANDS = 1;     // the blade is one hand's edge
-const CAM_WIDTH = 640;   // small detection frames = fast
-const CAM_HEIGHT = 480;
+const CAM_WIDTH = 480;   // small detection frames = faster inference
+const CAM_HEIGHT = 360;
 
-const SPAWN_MIN = 0.7;   // seconds between spawn waves
-const SPAWN_MAX = 1.9;
-const BURST_CHANCE = 0.22; // chance a wave drops 2-3 fruits at once
+const SPAWN_MIN = 0.55;  // seconds between spawn waves (more fruit in play...)
+const SPAWN_MAX = 1.5;   // (...but they fall slower, so it stays catchable)
+const BURST_CHANCE = 0.3; // chance a wave drops 2-3 fruits at once
 
 // ---- DOM --------------------------------------------------------------------
 const $ = (id) => document.getElementById(id);
@@ -218,12 +218,22 @@ async function start() {
 
     sfx.init();
 
+    // Warm up the model once now, while the loading overlay is still up:
+    // the first detectForVideo call compiles GPU shaders and is much slower
+    // than every call after it. Doing it here means the first real cut isn't
+    // fighting a cold model.
+    try {
+      landmarker.detectForVideo(video, performance.now());
+      lastVideoTime = video.currentTime;
+    } catch (err) { /* warm-up failure is not fatal */ }
+
     btn.classList.add("hidden");
     setStatus("");
     $("hint").classList.remove("hidden");
     running = true;
     lastT = performance.now();
     requestAnimationFrame(loop);
+    detectLoop();
   } catch (err) {
     console.error(err);
     showLoading(false);
@@ -322,52 +332,65 @@ function cutFruit(f) {
   }
 }
 
-// ---- main loop --------------------------------------------------------------------
+/* ---- detection loop ---------------------------------------------------------
+   Tracking runs in its OWN async loop that yields a frame between detections.
+   detectForVideo() is synchronous and blocks the main thread while it runs,
+   so if it happens inside the render loop it drags the whole game below
+   60fps and cuts feel late. Decoupled like this, rendering stays smooth and
+   only the blade updates at detection speed. */
+async function detectLoop() {
+  while (running) {
+    try {
+      if (video.readyState >= 2 && video.currentTime !== lastVideoTime) {
+        lastVideoTime = video.currentTime;
+        const now = performance.now();
+        const result = landmarker.detectForVideo(video, now);
+        if (result.landmarks && result.landmarks.length) {
+          const lm = result.landmarks[0];
+          const W = canvas.width;
+          const H = canvas.height;
+          // blade = wrist (0) -> pinky knuckle (17), mirrored to screen space
+          blade.addSample(
+            (1 - lm[0].x) * W, lm[0].y * H,
+            (1 - lm[17].x) * W, lm[17].y * H,
+            now
+          );
+          handSeen = true;
+          const fast = blade.speed() >= SLICE_SPEED;
+          if (fast && !swooshWasFast && now - sfx.lastSwoosh > 220) {
+            sfx.swoosh();
+            sfx.lastSwoosh = now;
+          }
+          swooshWasFast = fast;
+          if (fast) {
+            for (const f of fruits) {
+              if (!f.dead && blade.cuts(f)) cutFruit(f);
+            }
+          }
+        } else {
+          blade.clear();
+          handSeen = false;
+        }
+        detectErrors = 0;
+      }
+    } catch (err) {
+      if (++detectErrors > 5) {
+        running = false;
+        setStatus("Tracking error: " + err.message);
+        return;
+      }
+    }
+    await new Promise((r) => requestAnimationFrame(r));
+  }
+}
+
+// ---- main loop: physics + rendering only --------------------------------------------
 function loop(now) {
   if (!running) return;
   const dt = Math.min(0.05, (now - lastT) / 1000);
   lastT = now;
   const W = canvas.width;
   const H = canvas.height;
-
-  // -- hand tracking --
-  try {
-    if (video.readyState >= 2 && video.currentTime !== lastVideoTime) {
-      lastVideoTime = video.currentTime;
-      const result = landmarker.detectForVideo(video, now);
-      if (result.landmarks && result.landmarks.length) {
-        const lm = result.landmarks[0];
-        // blade = wrist (0) -> pinky knuckle (17), mirrored to screen space
-        blade.addSample(
-          (1 - lm[0].x) * W, lm[0].y * H,
-          (1 - lm[17].x) * W, lm[17].y * H,
-          now
-        );
-        handSeen = true;
-        const fast = blade.speed() >= SLICE_SPEED;
-        if (fast && !swooshWasFast && now - sfx.lastSwoosh > 220) {
-          sfx.swoosh();
-          sfx.lastSwoosh = now;
-        }
-        swooshWasFast = fast;
-        if (fast) {
-          for (const f of fruits) {
-            if (!f.dead && blade.cuts(f)) cutFruit(f);
-          }
-        }
-      } else {
-        blade.clear();
-        handSeen = false;
-      }
-      detectErrors = 0;
-    }
-  } catch (err) {
-    if (++detectErrors > 5) {
-      running = false;
-      setStatus("Tracking error: " + err.message);
-      return;
-    }
-  }
 
   // -- spawning --
   spawnTimer -= dt;
