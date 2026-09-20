@@ -145,4 +145,17 @@ assert.ok(vel.vx > 0 && vel.vy < 100, "velocity tracks motion");
 assert.ok(SLICE_WINDOW >= 3, "window spans several samples");
 console.log("slice window: OK");
 
+// ---- extended blade edge -------------------------------------------------------------
+// A fruit just past the pinky end of the blade is caught by the 30% extension
+const ext = new Blade();
+ext.addSample(200, 200, 200, 260, 0);
+ext.addSample(400, 200, 400, 260, 100); // fast right; blade is 60px tall
+const graze = new Fruit({ x: 400, y: 300, vx: 0, vy: 0, r: 20, size: 60,
+                          emoji: "🍎", juice: "#f00", points: 10, spin: 0 });
+assert.equal(ext.cuts(graze), true, "extended edge catches grazes past the pinky");
+const miss = new Fruit({ x: 400, y: 340, vx: 0, vy: 0, r: 20, size: 60,
+                         emoji: "🍎", juice: "#f00", points: 10, spin: 0 });
+assert.equal(ext.cuts(miss), false, "far below the blade is still not cut");
+console.log("blade extension: OK");
+
 console.log("\nAll logic tests passed.");

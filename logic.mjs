@@ -8,6 +8,7 @@
 export const GRAVITY = 45;          // px/s^2 — gentle, zen pace
 export const SLICE_SPEED = 150;     // px/s the blade must move before it cuts
 export const BLADE_WIDTH = 18;      // extra reach added to the fruit radius
+export const BLADE_EXTEND = 0.3;    // blade segment extended past wrist/pinky by this fraction of its length
 export const SLICE_WINDOW = 4;      // motion samples checked for a hit (bridges detection gaps)
 export const COAST_MS = 160;        // how long the blade keeps gliding through a tracking dropout
 export const COMBO_WINDOW_MS = 260; // cuts within this window chain together
@@ -157,7 +158,21 @@ export class Blade {
     if (!fast) return false;
     const r = fruit.r + BLADE_WIDTH;
     const c = this.samples[n - 1];
-    if (segCircleHit(c.ax, c.ay, c.bx, c.by, fruit.x, fruit.y, r)) return true;
+    // The effective blade runs a little past the wrist and pinky knuckle,
+    // so chops that graze the edge of the hand still cut.
+    const dx = c.bx - c.ax;
+    const dy = c.by - c.ay;
+    const len = Math.hypot(dx, dy);
+    let hit;
+    if (len > 1) {
+      const e = len * BLADE_EXTEND;
+      const ux = dx / len;
+      const uy = dy / len;
+      hit = segCircleHit(c.ax - ux * e, c.ay - uy * e, c.bx + ux * e, c.by + uy * e, fruit.x, fruit.y, r);
+    } else {
+      hit = segCircleHit(c.ax, c.ay, c.bx, c.by, fruit.x, fruit.y, r);
+    }
+    if (hit) return true;
     for (let i = start; i < n; i++) {
       const a = this.samples[i - 1];
       const b = this.samples[i];
