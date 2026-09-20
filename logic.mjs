@@ -5,9 +5,9 @@
    slices them with the edge of their hand (wrist -> pinky knuckle). */
 
 // ---- tuning ----------------------------------------------------------------
-export const GRAVITY = 55;          // px/s^2 — gentle, zen pace
-export const SLICE_SPEED = 170;     // px/s the blade must move before it cuts
-export const BLADE_WIDTH = 14;      // extra reach added to the fruit radius
+export const GRAVITY = 35;          // px/s^2 — gentle, zen pace
+export const SLICE_SPEED = 120;     // px/s the blade must move before it cuts
+export const BLADE_WIDTH = 30;      // extra reach added to the fruit radius
 export const COMBO_WINDOW_MS = 260; // cuts within this window chain together
 export const COMBO_BONUS_PER = 5;   // bonus points per fruit in a combo
 export const NORMAL_POINTS = 10;
@@ -79,7 +79,7 @@ export function spawnFruit(w, rng = Math.random) {
     x: 50 + rng() * Math.max(1, w - 100),
     y: -size,
     vx: (rng() - 0.5) * 80,
-    vy: (golden ? 55 : 20) + rng() * 35,
+    vy: (golden ? 35 : 10) + rng() * 20,
     spin: (rng() - 0.5) * 3,
     r: size * 0.42,
     size,
