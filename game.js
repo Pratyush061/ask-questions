@@ -10,7 +10,10 @@ import {
   HandLandmarker,
   FilesetResolver,
 } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
-import { Fruit, spawnFruit, Blade, ComboTracker, SLICE_SPEED } from "./logic.mjs";
+import {
+  Fruit, spawnFruit, Blade, ComboTracker, OneEuro2,
+  SLICE_SPEED, COAST_MS,
+} from "./logic.mjs";
 
 const MODEL_URL =
   "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
@@ -19,8 +22,14 @@ const WASM_BASE =
 
 // ---- performance tuning ----------------------------------------------------
 const NUM_HANDS = 1;     // the blade is one hand's edge
-const CAM_WIDTH = 480;   // small detection frames = faster inference
+const CAM_WIDTH = 480;   // camera resolution for the on-screen preview
 const CAM_HEIGHT = 360;
+
+// Inference runs on a much smaller offscreen copy of the frame (the model
+// resizes its input internally anyway, so accuracy barely changes but the
+// per-detection upload cost drops hard).
+const DETECT_WIDTH = 288;
+const DETECT_HEIGHT = 216;
 
 const SPAWN_MIN = 0.55;  // seconds between spawn waves (more fruit in play...)
 const SPAWN_MAX = 1.5;   // (...but they fall slower, so it stays catchable)
@@ -52,6 +61,15 @@ let best = 0;
 try { best = parseInt(localStorage.getItem("hn-best") ?? "0", 10) || 0; } catch (e) { /* ignore */ }
 let spawnTimer = 1.0;
 let swooshWasFast = false;
+let lastHandT = 0; // last time real landmarks were seen (for coasting)
+
+// offscreen detection canvas + landmark smoothing
+const detectCanvas = document.createElement("canvas");
+detectCanvas.width = DETECT_WIDTH;
+detectCanvas.height = DETECT_HEIGHT;
+const detectCtx = detectCanvas.getContext("2d");
+const wristFilter = new OneEuro2();
+const pinkyFilter = new OneEuro2();
 
 const sfx = {
   ctx: null,
@@ -149,6 +167,13 @@ async function createLandmarker() {
     baseOptions: { modelAssetPath: MODEL_URL, delegate },
     runningMode: "VIDEO",
     numHands: NUM_HANDS,
+    // Relaxed thresholds: at the default 0.5 a fast chop (motion blur)
+    // makes tracking lose confidence and fall back to slow palm
+    // re-detection — exactly when a cut must land. 0.4 keeps the light
+    // tracker locked on through blur.
+    minHandDetectionConfidence: 0.4,
+    minHandPresenceConfidence: 0.4,
+    minTrackingConfidence: 0.4,
   });
   try {
     return await HandLandmarker.createFromOptions(fileset, opts("GPU"));
@@ -223,7 +248,8 @@ async function start() {
     // than every call after it. Doing it here means the first real cut isn't
     // fighting a cold model.
     try {
-      landmarker.detectForVideo(video, performance.now());
+      detectCtx.drawImage(video, 0, 0, DETECT_WIDTH, DETECT_HEIGHT);
+      landmarker.detectForVideo(detectCanvas, performance.now());
       lastVideoTime = video.currentTime;
     } catch (err) { /* warm-up failure is not fatal */ }
 
@@ -344,18 +370,42 @@ async function detectLoop() {
       if (video.readyState >= 2 && video.currentTime !== lastVideoTime) {
         lastVideoTime = video.currentTime;
         const now = performance.now();
-        const result = landmarker.detectForVideo(video, now);
+        detectCtx.drawImage(video, 0, 0, DETECT_WIDTH, DETECT_HEIGHT);
+        const result = landmarker.detectForVideo(detectCanvas, now);
         if (result.landmarks && result.landmarks.length) {
           const lm = result.landmarks[0];
           const W = canvas.width;
           const H = canvas.height;
           // blade = wrist (0) -> pinky knuckle (17), mirrored to screen space
-          blade.addSample(
-            (1 - lm[0].x) * W, lm[0].y * H,
-            (1 - lm[17].x) * W, lm[17].y * H,
-            now
-          );
+          // and smoothed with a One-Euro filter: steady when the hand is
+          // still, essentially no lag when it swings
+          const wr = wristFilter.filter((1 - lm[0].x) * W, lm[0].y * H, now);
+          const pk = pinkyFilter.filter((1 - lm[17].x) * W, lm[17].y * H, now);
+          blade.addSample(wr.x, wr.y, pk.x, pk.y, now);
           handSeen = true;
+          lastHandT = now;
+        } else if (now - lastHandT < COAST_MS) {
+          // Tracking dropout during a swing: coast. The blade keeps gliding
+          // in its last direction with decaying speed instead of blinking
+          // out, so a chop that briefly outpaces the camera still lands.
+          const l = blade.last;
+          if (l) {
+            const v = blade.velocity();
+            const dt = (now - l.t) / 1000;
+            const decay = Math.exp(-dt / 0.08);
+            blade.addSample(
+              l.ax + v.vx * dt * decay, l.ay + v.vy * dt * decay,
+              l.bx + v.vx * dt * decay, l.by + v.vy * dt * decay,
+              now
+            );
+          }
+        } else {
+          blade.clear();
+          handSeen = false;
+        }
+        // Slice check runs on every fresh OR coasted sample: a swing that
+        // happens entirely inside a dropout still cuts through its path.
+        if (handSeen) {
           const fast = blade.speed() >= SLICE_SPEED;
           if (fast && !swooshWasFast && now - sfx.lastSwoosh > 220) {
             sfx.swoosh();
@@ -367,9 +417,6 @@ async function detectLoop() {
               if (!f.dead && blade.cuts(f)) cutFruit(f);
             }
           }
-        } else {
-          blade.clear();
-          handSeen = false;
         }
         detectErrors = 0;
       }
@@ -459,17 +506,23 @@ function render() {
   ctx.fillStyle = "rgba(8, 10, 24, 0.45)";
   ctx.fillRect(0, 0, W, H);
 
-  // soft blade edge so the player sees their blade even when still
+  // soft blade edge so the player sees their blade even when still — drawn
+  // at a lightly extrapolated position so it glides between detection frames
   const lastSample = blade.last;
   if (handSeen && lastSample) {
+    const v = blade.velocity();
+    const dt = Math.min(0.05, (performance.now() - lastSample.t) / 1000);
+    const decay = Math.exp(-dt / 0.08);
+    const ex = v.vx * dt * decay;
+    const ey = v.vy * dt * decay;
     ctx.save();
     ctx.globalAlpha = 0.35;
     ctx.strokeStyle = "#7df9ff";
     ctx.lineWidth = 5;
     ctx.lineCap = "round";
     ctx.beginPath();
-    ctx.moveTo(lastSample.ax, lastSample.ay);
-    ctx.lineTo(lastSample.bx, lastSample.by);
+    ctx.moveTo(lastSample.ax + ex, lastSample.ay + ey);
+    ctx.lineTo(lastSample.bx + ex, lastSample.by + ey);
     ctx.stroke();
     ctx.restore();
   }

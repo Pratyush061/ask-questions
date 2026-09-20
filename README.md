@@ -22,15 +22,21 @@ fruit to score. No timer, no losing — just relaxing fruit cutting.
 ## How it works
 
 1. **Hand tracking** — MediaPipe's HandLandmarker (VIDEO mode, one hand,
-   480×360 detection frames for fast inference, WebGL delegate with CPU
-   fallback) returns 21 landmarks per hand. Detection runs in its own loop
-   that yields a frame between detections, so a slow inference call never
-   drags the rendering below 60fps, and the model is warmed up once at
-   startup so the first cut isn't fighting shader compilation.
-2. **Blade** — the segment from the wrist to the pinky knuckle. A fruit is
-   cut when the blade segment (or the path its midpoint swept this frame)
-   touches the fruit while moving faster than the slice threshold — so a
-   still hand never slices, and fast swipes never "tunnel" through fruit.
+   WebGL delegate with CPU fallback). Inference runs on a downscaled
+   offscreen copy of the camera frame, in its own loop that yields between
+   detections, so rendering never drops below 60fps; the model is warmed up
+   once at startup. Tracking thresholds are relaxed (0.4 instead of the
+   default 0.5) so fast chops with motion blur keep the light tracker
+   engaged instead of falling back to slow re-detection, and landmarks
+   pass through a One-Euro filter — steady when the hand is still,
+   essentially no lag when it swings.
+2. **Blade** — the segment from the wrist to the pinky knuckle. During the
+   brief dropouts of a fast swing the blade *coasts*: it keeps gliding in
+   its last direction with decaying speed for up to 160 ms instead of
+   blinking out, so a chop that outpaces the camera still lands. A fruit
+   is cut when the blade segment, or its swept path over the last few
+   motion samples, touches the fruit while moving faster than the slice
+   threshold.
 3. **Physics** — fruits fall with gentle gravity (tuned so a real hand can
    comfortably outrun them), drift sideways, bounce off the side walls and
    spin. Halves and juice particles fly apart from the cut line.
