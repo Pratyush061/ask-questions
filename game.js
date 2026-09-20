@@ -1,0 +1,552 @@
+/* Hand Ninja — zen fruit slicing with the edge of your hand.
+   MediaPipe tracks one hand (VIDEO mode); the blade is the segment from the
+   wrist to the pinky knuckle (the chopping edge of the hand). Fruits fall
+   from the top of the screen; slice them fast to score. No timer, no losing.
+
+   Pure game logic (physics, slicing geometry, combos) lives in logic.mjs
+   and is unit-tested with node logic.test.mjs. */
+
+import {
+  HandLandmarker,
+  FilesetResolver,
+} from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
+import { Fruit, spawnFruit, Blade, ComboTracker, SLICE_SPEED } from "./logic.mjs";
+
+const MODEL_URL =
+  "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
+const WASM_BASE =
+  "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
+
+// ---- performance tuning ----------------------------------------------------
+const NUM_HANDS = 1;     // the blade is one hand's edge
+const CAM_WIDTH = 640;   // small detection frames = fast
+const CAM_HEIGHT = 480;
+
+const SPAWN_MIN = 0.7;   // seconds between spawn waves
+const SPAWN_MAX = 1.9;
+const BURST_CHANCE = 0.22; // chance a wave drops 2-3 fruits at once
+
+// ---- DOM --------------------------------------------------------------------
+const $ = (id) => document.getElementById(id);
+const video = $("cam");
+const canvas = $("overlay");
+const ctx = canvas.getContext("2d");
+const stage = $("stage");
+
+// ---- game state ----------------------------------------------------------------
+const blade = new Blade();
+const combo = new ComboTracker();
+let fruits = [];       // Fruit[]
+let halves = [];       // sliced fruit halves flying apart
+let particles = [];   // juice splatter
+let texts = [];       // floating score texts
+let landmarker = null;
+let running = false;
+let lastT = 0;
+let lastVideoTime = -1;
+let detectErrors = 0;
+let handSeen = false;
+let score = 0;
+let cuts = 0;
+let best = 0;
+try { best = parseInt(localStorage.getItem("hn-best") ?? "0", 10) || 0; } catch (e) { /* ignore */ }
+let spawnTimer = 1.0;
+let swooshWasFast = false;
+
+const sfx = {
+  ctx: null,
+  enabled: true,
+  lastSwoosh: 0,
+  noise: null,
+
+  init() {
+    if (this.ctx) { this.ctx.resume(); return; }
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    this.ctx = new AC();
+    this.master = this.ctx.createGain();
+    this.master.gain.value = 0.5;
+    this.master.connect(this.ctx.destination);
+    // shared white-noise buffer
+    const len = this.ctx.sampleRate * 0.3;
+    this.noise = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
+    const d = this.noise.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+  },
+
+  ok() { return this.enabled && this.ctx; },
+
+  splat() {
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    // juicy noise burst
+    const src = this.ctx.createBufferSource();
+    src.buffer = this.noise;
+    const lp = this.ctx.createBiquadFilter();
+    lp.type = "lowpass";
+    lp.frequency.value = 900;
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.5, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.1);
+    src.connect(lp).connect(g).connect(this.master);
+    src.start(t);
+    src.stop(t + 0.12);
+    // low thump
+    const o = this.ctx.createOscillator();
+    o.type = "sine";
+    o.frequency.setValueAtTime(170, t);
+    o.frequency.exponentialRampToValueAtTime(60, t + 0.12);
+    const og = this.ctx.createGain();
+    og.gain.setValueAtTime(0.35, t);
+    og.gain.exponentialRampToValueAtTime(0.001, t + 0.14);
+    o.connect(og).connect(this.master);
+    o.start(t);
+    o.stop(t + 0.15);
+  },
+
+  swoosh() {
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    const src = this.ctx.createBufferSource();
+    src.buffer = this.noise;
+    const bp = this.ctx.createBiquadFilter();
+    bp.type = "bandpass";
+    bp.Q.value = 1.2;
+    bp.frequency.setValueAtTime(350, t);
+    bp.frequency.exponentialRampToValueAtTime(2400, t + 0.16);
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.18, t + 0.06);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.18);
+    src.connect(bp).connect(g).connect(this.master);
+    src.start(t);
+    src.stop(t + 0.2);
+  },
+
+  sparkle() {
+    if (!this.ok()) return;
+    const t0 = this.ctx.currentTime;
+    [880, 1174, 1568].forEach((f, i) => {
+      const o = this.ctx.createOscillator();
+      o.type = "triangle";
+      o.frequency.value = f;
+      const g = this.ctx.createGain();
+      const t = t0 + i * 0.06;
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.16, t + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
+      o.connect(g).connect(this.master);
+      o.start(t);
+      o.stop(t + 0.14);
+    });
+  },
+};
+
+// ---- model + camera (same mobile-safe patterns as before) --------------------
+async function createLandmarker() {
+  const fileset = await FilesetResolver.forVisionTasks(WASM_BASE);
+  const opts = (delegate) => ({
+    baseOptions: { modelAssetPath: MODEL_URL, delegate },
+    runningMode: "VIDEO",
+    numHands: NUM_HANDS,
+  });
+  try {
+    return await HandLandmarker.createFromOptions(fileset, opts("GPU"));
+  } catch (err) {
+    console.warn("GPU delegate failed, falling back to CPU:", err);
+    return await HandLandmarker.createFromOptions(fileset, opts("CPU"));
+  }
+}
+
+let modelError = null;
+const modelPromise = createLandmarker().catch((err) => {
+  modelError = err;
+  return null;
+});
+
+async function openCamera() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    throw new Error(
+      "This browser cannot access the camera. Open the page over HTTPS (or localhost)."
+    );
+  }
+  try {
+    return await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: {
+        facingMode: "user",
+        width: { ideal: CAM_WIDTH },
+        height: { ideal: CAM_HEIGHT },
+      },
+    });
+  } catch (err) {
+    return await navigator.mediaDevices.getUserMedia({ audio: false, video: true });
+  }
+}
+
+function showLoading(on, msg = "") {
+  $("loading").classList.toggle("hidden", !on);
+  $("loadMsg").textContent = msg;
+}
+
+function setStatus(text) {
+  $("status").textContent = text;
+}
+
+async function start() {
+  const btn = $("startBtn");
+  btn.disabled = true;
+  try {
+    showLoading(true, "Starting camera…");
+    const stream = await openCamera();
+    video.srcObject = stream;
+    await video.play();
+    if (!video.videoWidth) {
+      await new Promise((res) =>
+        video.addEventListener("loadedmetadata", res, { once: true })
+      );
+    }
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    stage.style.aspectRatio = `${video.videoWidth} / ${video.videoHeight}`;
+    layoutCanvas();
+
+    showLoading(true, "Loading hand-tracking model…");
+    landmarker = await modelPromise;
+    if (!landmarker) throw modelError || new Error("Model failed to load");
+    showLoading(false);
+
+    sfx.init();
+
+    btn.classList.add("hidden");
+    setStatus("");
+    $("hint").classList.remove("hidden");
+    running = true;
+    lastT = performance.now();
+    requestAnimationFrame(loop);
+  } catch (err) {
+    console.error(err);
+    showLoading(false);
+    btn.disabled = false;
+    setStatus("Could not start: " + err.message);
+  }
+}
+
+/* Keep the overlay canvas exactly on top of the letterboxed video. */
+function layoutCanvas() {
+  const vw = video.videoWidth || 640;
+  const vh = video.videoHeight || 480;
+  const sw = stage.clientWidth;
+  const sh = stage.clientHeight;
+  if (!sw || !sh) return;
+  const scale = Math.min(sw / vw, sh / vh);
+  const w = vw * scale;
+  const h = vh * scale;
+  canvas.style.width = `${w}px`;
+  canvas.style.height = `${h}px`;
+  canvas.style.left = `${(sw - w) / 2}px`;
+  canvas.style.top = `${(sh - h) / 2}px`;
+}
+new ResizeObserver(layoutCanvas).observe(stage);
+
+$("startBtn").addEventListener("click", start);
+$("muteBtn").addEventListener("click", () => {
+  sfx.enabled = !sfx.enabled;
+  $("muteBtn").textContent = sfx.enabled ? "🔊" : "🔇";
+});
+$("resetBtn").addEventListener("click", () => {
+  score = 0;
+  cuts = 0;
+  fruits = [];
+  halves = [];
+  particles = [];
+  texts = [];
+});
+
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) blade.clear(); // avoid a phantom mega-slice on return
+});
+
+// ---- spawning -----------------------------------------------------------------
+function spawnWave() {
+  const n = Math.random() < BURST_CHANCE ? 2 + Math.floor(Math.random() * 2) : 1;
+  for (let i = 0; i < n; i++) fruits.push(spawnFruit(canvas.width));
+}
+
+// ---- slicing --------------------------------------------------------------------
+function cutFruit(f) {
+  f.dead = true;
+  cuts += 1;
+  score += f.points;
+
+  const ang = blade.angle() + Math.PI / 2; // cut line perpendicular to motion
+  const px = Math.cos(ang);
+  const py = Math.sin(ang);
+  // two halves fly apart along the cut
+  for (const side of [-1, 1]) {
+    halves.push({
+      x: f.x, y: f.y,
+      vx: f.vx + px * side * (60 + Math.random() * 60),
+      vy: f.vy - 40 + py * side * (60 + Math.random() * 60),
+      rot: ang, rotSpeed: (Math.random() - 0.5) * 6,
+      cut: ang, emoji: f.emoji, size: f.size, side,
+      life: 1.1,
+    });
+  }
+  // juice splatter
+  const n = f.golden ? 26 : 16;
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const sp = 40 + Math.random() * 180;
+    particles.push({
+      x: f.x, y: f.y,
+      vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 40,
+      r: 2 + Math.random() * (f.golden ? 6 : 4),
+      life: 0.5 + Math.random() * 0.5,
+      color: f.golden ? (Math.random() < 0.5 ? "#ffd700" : "#fff3b0") : f.juice,
+    });
+  }
+  texts.push({
+    x: f.x, y: f.y - f.r, vy: -55,
+    life: 0.9, text: f.golden ? `+${f.points} ⭐` : `+${f.points}`,
+    color: f.golden ? "#ffd700" : "#ffffff", big: f.golden,
+  });
+
+  combo.registerCut(performance.now());
+  sfx.splat();
+  if (f.golden) sfx.sparkle();
+
+  if (score > best) {
+    best = score;
+    try { localStorage.setItem("hn-best", String(best)); } catch (e) { /* ignore */ }
+  }
+}
+
+// ---- main loop --------------------------------------------------------------------
+function loop(now) {
+  if (!running) return;
+  const dt = Math.min(0.05, (now - lastT) / 1000);
+  lastT = now;
+  const W = canvas.width;
+  const H = canvas.height;
+
+  // -- hand tracking --
+  try {
+    if (video.readyState >= 2 && video.currentTime !== lastVideoTime) {
+      lastVideoTime = video.currentTime;
+      const result = landmarker.detectForVideo(video, now);
+      if (result.landmarks && result.landmarks.length) {
+        const lm = result.landmarks[0];
+        // blade = wrist (0) -> pinky knuckle (17), mirrored to screen space
+        blade.addSample(
+          (1 - lm[0].x) * W, lm[0].y * H,
+          (1 - lm[17].x) * W, lm[17].y * H,
+          now
+        );
+        handSeen = true;
+        const fast = blade.speed() >= SLICE_SPEED;
+        if (fast && !swooshWasFast && now - sfx.lastSwoosh > 220) {
+          sfx.swoosh();
+          sfx.lastSwoosh = now;
+        }
+        swooshWasFast = fast;
+        if (fast) {
+          for (const f of fruits) {
+            if (!f.dead && blade.cuts(f)) cutFruit(f);
+          }
+        }
+      } else {
+        blade.clear();
+        handSeen = false;
+      }
+      detectErrors = 0;
+    }
+  } catch (err) {
+    if (++detectErrors > 5) {
+      running = false;
+      setStatus("Tracking error: " + err.message);
+      return;
+    }
+  }
+
+  // -- spawning --
+  spawnTimer -= dt;
+  if (spawnTimer <= 0) {
+    spawnWave();
+    spawnTimer = SPAWN_MIN + Math.random() * (SPAWN_MAX - SPAWN_MIN);
+  }
+
+  // -- physics --
+  for (const f of fruits) f.update(dt, W, H);
+  fruits = fruits.filter((f) => !f.dead);
+
+  for (const h of halves) {
+    h.vy += 500 * dt;
+    h.x += h.vx * dt;
+    h.y += h.vy * dt;
+    h.rot += h.rotSpeed * dt;
+    h.life -= dt;
+  }
+  halves = halves.filter((h) => h.life > 0 && h.y < H + 120);
+
+  for (const p of particles) {
+    p.vy += 700 * dt;
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    p.life -= dt;
+  }
+  particles = particles.filter((p) => p.life > 0);
+
+  for (const t of texts) {
+    t.y += t.vy * dt;
+    t.life -= dt;
+  }
+  texts = texts.filter((t) => t.life > 0);
+
+  // -- combos --
+  const finished = combo.poll(now);
+  if (finished) {
+    score += finished.bonus;
+    texts.push({
+      x: W / 2, y: H / 2.4, vy: -40, life: 1.2,
+      text: `COMBO x${finished.count}  +${finished.bonus}`,
+      color: "#7df9ff", big: true,
+    });
+  }
+
+  try {
+    render();
+  } catch (err) {
+    console.error("render error:", err); // a UI glitch must never kill tracking
+  }
+  requestAnimationFrame(loop);
+}
+
+// ---- rendering -----------------------------------------------------------------------
+function render() {
+  const W = canvas.width;
+  const H = canvas.height;
+
+  // mirrored camera as the backdrop, veiled for contrast
+  ctx.save();
+  ctx.translate(W, 0);
+  ctx.scale(-1, 1);
+  ctx.drawImage(video, 0, 0, W, H);
+  ctx.restore();
+  ctx.fillStyle = "rgba(8, 10, 24, 0.45)";
+  ctx.fillRect(0, 0, W, H);
+
+  // soft blade edge so the player sees their blade even when still
+  const lastSample = blade.last;
+  if (handSeen && lastSample) {
+    ctx.save();
+    ctx.globalAlpha = 0.35;
+    ctx.strokeStyle = "#7df9ff";
+    ctx.lineWidth = 5;
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(lastSample.ax, lastSample.ay);
+    ctx.lineTo(lastSample.bx, lastSample.by);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // glowing slice trail
+  const trail = blade.trail();
+  if (handSeen && trail.length > 3) {
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    for (let i = 1; i < trail.length; i++) {
+      const a = (i / trail.length) * 0.5;
+      ctx.strokeStyle = `rgba(125, 249, 255, ${a})`;
+      ctx.lineWidth = 2 + (i / trail.length) * 10;
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(trail[i - 1].x, trail[i - 1].y);
+      ctx.lineTo(trail[i].x, trail[i].y);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // fruits
+  for (const f of fruits) {
+    ctx.save();
+    ctx.translate(f.x, f.y);
+    ctx.rotate(f.angle);
+    if (f.golden) {
+      ctx.shadowColor = "#ffd700";
+      ctx.shadowBlur = 30;
+    } else {
+      ctx.shadowColor = "rgba(0, 0, 0, 0.55)";
+      ctx.shadowBlur = 14;
+    }
+    ctx.font = `${f.size}px serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(f.emoji, 0, 0);
+    ctx.restore();
+    if (f.golden) { // shimmering ring
+      ctx.save();
+      ctx.strokeStyle = "rgba(255, 215, 0, 0.85)";
+      ctx.lineWidth = 2.5;
+      ctx.setLineDash([9, 7]);
+      ctx.lineDashOffset = -performance.now() / 50;
+      ctx.beginPath();
+      ctx.arc(f.x, f.y, f.r + 9, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  // sliced halves (each half is the emoji clipped along the cut line)
+  for (const h of halves) {
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, h.life / 0.5);
+    ctx.translate(h.x, h.y);
+    ctx.rotate(h.rot);
+    ctx.beginPath();
+    const s = h.size;
+    if (h.side < 0) ctx.rect(-s, -s, s, 2 * s); // left half
+    else ctx.rect(0, -s, s, 2 * s);              // right half
+    ctx.clip();
+    ctx.font = `${h.size}px serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.shadowColor = "rgba(0,0,0,0.5)";
+    ctx.shadowBlur = 10;
+    ctx.fillText(h.emoji, 0, 0);
+    ctx.restore();
+  }
+
+  // juice splatter
+  for (const p of particles) {
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, p.life / 0.3);
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // floating texts
+  for (const t of texts) {
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, t.life / 0.4);
+    ctx.fillStyle = t.color;
+    ctx.strokeStyle = "rgba(0, 0, 0, 0.7)";
+    ctx.lineWidth = 4;
+    ctx.font = `800 ${t.big ? 34 : 24}px Outfit, system-ui, sans-serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.strokeText(t.text, t.x, t.y);
+    ctx.fillText(t.text, t.x, t.y);
+    ctx.restore();
+  }
+
+  // HUD (DOM)
+  $("score").textContent = score;
+  $("cuts").textContent = `${cuts} cut`;
+  $("best").textContent = `Best ${best}`;
+}

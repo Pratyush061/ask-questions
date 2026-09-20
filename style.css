@@ -1,21 +1,14 @@
-/* Hand Quiz — high-contrast theme (dark text on light/yellow background)
-   for readability by elderly and low-eyesight players.
-   Text sizes use --text-scale, controlled by the A+ / A− buttons. */
+/* Hand Ninja — dark zen theme. */
 
 :root {
-  --bg: #fff9e6;               /* warm cream */
-  --text: #17130b;             /* near-black */
-  --dim: #4a4433;
-  --panel: #ffffff;
-  --border: #2a2416;           /* strong dark borders */
-  --amber: #f5b301;            /* main accent */
-  --amber-dark: #b45309;
-  --green: #15803d;
-  --red: #b91c1c;
-  --grad: linear-gradient(90deg, #b45309, #7c2d12);
+  --bg: #07090f;
+  --text: #eef2ff;
+  --dim: #8b93a7;
+  --panel: rgba(255, 255, 255, 0.06);
+  --border: rgba(255, 255, 255, 0.16);
+  --cyan: #7df9ff;
+  --gold: #ffd700;
   --radius: 18px;
-  --text-scale: 1;            /* set by the A+ / A− buttons */
-  --font: "Outfit", "Noto Sans Devanagari", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 
 * { box-sizing: border-box; }
@@ -23,9 +16,12 @@ html, body { height: 100%; }
 
 body {
   margin: 0;
-  background: var(--bg);
+  background:
+    radial-gradient(1000px 500px at 15% -10%, rgba(125, 249, 255, 0.08), transparent 60%),
+    radial-gradient(800px 500px at 90% 110%, rgba(255, 158, 63, 0.07), transparent 60%),
+    var(--bg);
   color: var(--text);
-  font-family: var(--font);
+  font-family: "Outfit", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   display: flex;
   flex-direction: column;
   height: 100dvh;
@@ -34,11 +30,6 @@ body {
 }
 
 .hidden { display: none !important; }
-.dim { color: var(--dim); }
-.accent {
-  color: var(--amber-dark);
-  font-weight: 800;
-}
 
 /* ---------- HUD ---------- */
 #hud {
@@ -46,70 +37,65 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 10px 12px;
+  padding: 10px 14px;
   padding-top: calc(10px + env(safe-area-inset-top));
   flex-wrap: wrap;
 }
 
+.hud-group { display: flex; gap: 8px; }
+
 .chip {
   background: var(--panel);
-  border: 2px solid var(--border);
+  border: 1px solid var(--border);
   border-radius: 999px;
   padding: 5px 14px;
-  font-size: calc(0.9rem * var(--text-scale));
+  font-size: 0.95rem;
   font-weight: 700;
   white-space: nowrap;
+  backdrop-filter: blur(8px);
 }
 
-.chip.logo { color: var(--amber-dark); font-weight: 800; }
+.chip.score {
+  font-size: 1.3rem;
+  font-weight: 800;
+  color: var(--gold);
+  border-color: rgba(255, 215, 0, 0.4);
+  min-width: 74px;
+  text-align: center;
+}
+
+.chip.logo { color: var(--cyan); font-weight: 800; }
 
 button.chip { color: var(--text); cursor: pointer; transition: background 100ms; }
-button.chip:hover { background: var(--amber); }
-button.chip:disabled { opacity: 0.45; cursor: default; }
-button.chip:disabled:hover { background: var(--panel); }
+button.chip:hover { background: rgba(255, 255, 255, 0.15); }
 
-.hud-group { display: flex; gap: 6px; }
-
-/* hide the logo on very narrow phones so the A+ buttons always fit */
 @media (max-width: 430px) {
   .chip.logo { display: none; }
 }
 
-#quizProgress {
-  height: 5px;
-  background: #e7ddc2;
-  border: 1px solid var(--border);
-}
-
-#quizProgressFill {
-  height: 100%;
-  width: 0%;
-  background: var(--amber-dark);
-  transition: width 300ms ease;
-}
-
-/* ---------- layout: video on top, panel below (mobile-first) ---------- */
+/* ---------- layout ---------- */
 #wrap {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
+  align-items: center;
   gap: 10px;
   width: 100%;
-  max-width: 1100px;
+  max-width: 1000px;
   margin: 0 auto;
-  padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+  padding: 0 14px calc(10px + env(safe-area-inset-bottom));
 }
 
 #stage {
   position: relative;
   width: 100%;
   aspect-ratio: 4 / 3; /* replaced with the real video ratio at startup */
-  background: #fff;
+  background: #000;
   border-radius: var(--radius);
   overflow: hidden;
-  border: 2px solid var(--border);
-  box-shadow: 4px 4px 0 rgba(42, 36, 22, 0.25);
+  border: 1px solid var(--border);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
 }
 
 #cam {
@@ -123,121 +109,13 @@ button.chip:disabled:hover { background: var(--panel); }
 
 #overlay { position: absolute; }
 
-#gestureChip {
-  position: absolute;
-  top: 10px;
-  left: 10px;
-  z-index: 7;
-  font-size: calc(1rem * var(--text-scale));
-}
-
-/* ---------- quiz panel ---------- */
-#panel {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  background: var(--panel);
-  border: 2px solid var(--border);
-  border-radius: var(--radius);
-  padding: 12px 14px;
+#hint {
+  margin: 0;
+  color: var(--dim);
+  font-size: 0.95rem;
   text-align: center;
-  box-shadow: 4px 4px 0 rgba(42, 36, 22, 0.25);
-  scrollbar-width: thin;
 }
-
-.view { animation: fadeUp 240ms ease both; }
-
-@keyframes fadeUp {
-  from { opacity: 0; transform: translateY(8px); }
-  to { opacity: 1; transform: none; }
-}
-
-.view h1 {
-  margin: 4px 0 6px;
-  font-size: calc(1.35rem * var(--text-scale));
-  font-weight: 800;
-}
-.view h2 {
-  margin: 2px 0 10px;
-  font-size: calc(1.25rem * var(--text-scale));
-  font-weight: 800;
-  line-height: 1.35;
-}
-.view p {
-  margin: 6px 0;
-  font-size: calc(1rem * var(--text-scale));
-  line-height: 1.5;
-}
-
-#options {
-  list-style: none;
-  margin: 0 auto 8px;
-  padding: 0;
-  display: grid;
-  gap: 10px;
-  text-align: left;
-  max-width: 560px;
-}
-
-#options li {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 14px;
-  border-radius: 12px;
-  border: 2px solid var(--border);
-  background: var(--bg);
-  transition: background 120ms, border-color 120ms, transform 120ms;
-}
-
-#options li.active {
-  background: #d9f4e2;
-  border-color: var(--green);
-  border-width: 3px;
-  transform: translateX(4px);
-}
-
-#options .num {
-  width: calc(28px * var(--text-scale));
-  height: calc(28px * var(--text-scale));
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--amber);
-  border: 2px solid var(--border);
-  border-radius: 50%;
-  font-size: calc(0.95rem * var(--text-scale));
-  font-weight: 800;
-}
-
-#options .tally {
-  color: var(--green);
-  letter-spacing: 3px;
-  flex: none;
-  font-weight: 800;
-}
-
-#options .txt { font-size: calc(1.15rem * var(--text-scale)); font-weight: 600; }
-
-/* ---------- progress bar ---------- */
-.bar {
-  height: calc(14px * var(--text-scale));
-  max-width: 460px;
-  margin: 12px auto 4px;
-  background: #e7ddc2;
-  border: 2px solid var(--border);
-  border-radius: 999px;
-  overflow: hidden;
-}
-
-.bar > div {
-  height: 100%;
-  width: 0%;
-  background: linear-gradient(90deg, var(--amber-dark), var(--green));
-  border-radius: 999px;
-  transition: width 100ms linear;
-}
+#hint strong { color: var(--cyan); }
 
 /* ---------- start button ---------- */
 #startBtn {
@@ -249,21 +127,21 @@ button.chip:disabled:hover { background: var(--panel); }
   flex-direction: column;
   align-items: center;
   gap: 6px;
-  padding: 18px 38px;
-  border: 3px solid var(--border);
+  padding: 20px 44px;
+  border: 1px solid var(--border);
   border-radius: 22px;
   cursor: pointer;
-  background: var(--amber);
+  background: linear-gradient(135deg, rgba(125, 249, 255, 0.16), rgba(255, 158, 63, 0.16));
   color: var(--text);
-  font-size: calc(1.2rem * var(--text-scale));
+  font-size: 1.2rem;
   font-weight: 800;
   z-index: 10;
-  box-shadow: 5px 5px 0 rgba(42, 36, 22, 0.45);
+  backdrop-filter: blur(6px);
 }
 
-#startBtn .big { font-size: 2.2rem; }
+#startBtn .big { font-size: 2.4rem; }
 #startBtn:disabled { opacity: 0.6; cursor: wait; }
-#startBtn:hover:not(:disabled) { background: #ffc82e; }
+#startBtn:hover:not(:disabled) { background: linear-gradient(135deg, rgba(125, 249, 255, 0.28), rgba(255, 158, 63, 0.28)); }
 
 #status {
   position: absolute;
@@ -271,11 +149,11 @@ button.chip:disabled:hover { background: var(--panel); }
   left: 0;
   right: 0;
   text-align: center;
-  color: var(--red);
+  color: #ff7675;
   font-weight: 700;
-  font-size: calc(0.95rem * var(--text-scale));
+  font-size: 0.95rem;
   padding: 0 16px;
-  text-shadow: 0 1px 3px #fff;
+  text-shadow: 0 1px 3px #000;
   z-index: 10;
   margin: 0;
 }
@@ -289,9 +167,8 @@ button.chip:disabled:hover { background: var(--panel); }
   align-items: center;
   justify-content: center;
   gap: 12px;
-  background: rgba(255, 249, 230, 0.85);
+  background: rgba(7, 9, 15, 0.75);
   z-index: 9;
-  font-size: calc(1rem * var(--text-scale));
   font-weight: 600;
 }
 
@@ -299,49 +176,12 @@ button.chip:disabled:hover { background: var(--panel); }
   width: 44px;
   height: 44px;
   border-radius: 50%;
-  border: 5px solid #e7ddc2;
-  border-top-color: var(--amber-dark);
+  border: 5px solid rgba(255, 255, 255, 0.15);
+  border-top-color: var(--cyan);
   animation: spin 700ms linear infinite;
 }
 
 @keyframes spin { to { transform: rotate(360deg); } }
-
-/* ---------- feedback flash ---------- */
-#feedback {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  z-index: 8;
-  pointer-events: none;
-}
-
-#feedback.correct { background: rgba(21, 128, 61, 0.85); }
-#feedback.wrong { background: rgba(185, 28, 28, 0.85); }
-
-#feedbackEmoji {
-  font-size: clamp(2.5rem, 10vw, 4.5rem);
-  animation: pop 340ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
-}
-#feedbackText {
-  color: #fff;
-  font-size: calc(clamp(1.4rem, 6vw, 2.4rem) * var(--text-scale));
-  font-weight: 800;
-  letter-spacing: 3px;
-  animation: pop 340ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
-}
-#feedbackSub {
-  color: #fff;
-  font-size: calc(1.05rem * var(--text-scale));
-  font-weight: 600;
-}
-
-@keyframes pop {
-  from { transform: scale(0.55); opacity: 0; }
-  to { transform: scale(1); opacity: 1; }
-}
 
 footer {
   text-align: center;
@@ -350,14 +190,7 @@ footer {
   padding: 6px 12px calc(6px + env(safe-area-inset-bottom));
 }
 
-/* ---------- wide / landscape screens: video and panel side by side ---------- */
-@media (orientation: landscape) and (min-width: 700px) {
-  #wrap { flex-direction: row; align-items: stretch; }
-  #stage { flex: 1; aspect-ratio: auto; min-width: 0; }
-  #panel { width: 400px; flex: none; }
-}
-
-/* respect users who prefer less motion */
-@media (prefers-reduced-motion: reduce) {
-  .view, #feedbackEmoji, #feedbackText { animation: none; }
+/* wide screens: give the stage more height */
+@media (orientation: landscape) and (min-height: 600px) {
+  #stage { max-width: 100%; }
 }

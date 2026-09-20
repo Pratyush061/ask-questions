@@ -3,10 +3,10 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>Hand Quiz — answer with your fingers</title>
-  <meta name="description" content="A webcam quiz game: MediaPipe tracks your hand, you answer questions by holding up fingers." />
+  <title>Hand Ninja — slice fruit with your hand</title>
+  <meta name="description" content="Zen fruit slicing: your webcam tracks your hand and the edge of your hand is the blade. Cut falling fruit, chase combos, catch golden fruit." />
   <meta name="theme-color" content="#07090f" />
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🖐️</text></svg>" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍉</text></svg>" />
 
   <!-- Start the big downloads before any JS runs -->
   <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
@@ -16,34 +16,31 @@
 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;800&family=Noto+Sans+Devanagari:wght@400;600;800&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;800&display=swap" rel="stylesheet" />
 
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
   <header id="hud">
-    <span class="chip" id="score">Score 0/20</span>
-    <span class="chip logo" id="qnum">🖐️ Hand Quiz</span>
-    <span class="hud-group">
-      <button class="chip btn" id="fontDownBtn" title="Smaller text">A−</button>
-      <button class="chip btn" id="fontUpBtn" title="Bigger text">A+</button>
-      <button class="chip btn" id="restartBtn" title="Restart quiz">↺</button>
-    </span>
+    <div class="hud-group">
+      <span class="chip score" id="score">0</span>
+      <span class="chip" id="cuts">0 cut</span>
+      <span class="chip" id="best">Best 0</span>
+    </div>
+    <span class="chip logo">🥷 Hand Ninja</span>
+    <div class="hud-group">
+      <button class="chip btn" id="muteBtn" title="Toggle sound">🔊</button>
+      <button class="chip btn" id="resetBtn" title="Reset score">↺</button>
+    </div>
   </header>
 
-  <!-- overall quiz progress -->
-  <div id="quizProgress"><div id="quizProgressFill"></div></div>
-
   <main id="wrap">
-    <!-- camera area: aspect ratio is set to the real video ratio at startup -->
     <div id="stage">
       <video id="cam" playsinline muted></video>
       <canvas id="overlay"></canvas>
 
-      <div id="gestureChip" class="chip hidden">✋ 0</div>
-
       <button id="startBtn">
-        <span class="big">🖐️</span>
+        <span class="big">🍉</span>
         <span>Start camera</span>
       </button>
       <p id="status"></p>
@@ -52,41 +49,13 @@
         <div class="spinner"></div>
         <p id="loadMsg">Loading…</p>
       </div>
-
-      <div id="feedback" class="hidden">
-        <div id="feedbackEmoji"></div>
-        <div id="feedbackText"></div>
-        <div id="feedbackSub"></div>
-      </div>
     </div>
 
-    <!-- quiz panel: below the video on phones, beside it on wide screens -->
-    <section id="panel">
-      <div id="viewIntro" class="view">
-        <h1>Show your hand <span class="accent">to play</span></h1>
-        <p>The camera tracks your hand. Answer each question by
-           <strong>holding up 1–4 fingers</strong> until the bar fills.</p>
-        <p class="dim">Show any fingers to begin…</p>
-        <div class="bar"><div id="introFill"></div></div>
-      </div>
-
-      <div id="viewQuestion" class="view hidden">
-        <h2 id="prompt"></h2>
-        <ul id="options"></ul>
-        <div class="bar"><div id="answerFill"></div></div>
-        <div id="holdLabel" class="dim"></div>
-      </div>
-
-      <div id="viewDone" class="view hidden">
-        <h1>🎉 Quiz <span class="accent">complete</span></h1>
-        <p id="finalScore"></p>
-        <p class="dim">Show any fingers — or tap ↺ — to play again</p>
-      </div>
-    </section>
+    <p id="hint" class="hidden">Chop with the <strong>edge of your hand</strong> ✋ — no timer, no losing, just zen. Golden fruit = 50 points.</p>
   </main>
 
   <footer>Hand tracking runs entirely in your browser · built with MediaPipe</footer>
 
-  <script type="module" src="app.js"></script>
+  <script type="module" src="game.js"></script>
 </body>
 </html>
