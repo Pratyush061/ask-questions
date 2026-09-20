@@ -19,8 +19,8 @@ const WASM_BASE =
 
 // ---- performance tuning ----------------------------------------------------
 const NUM_HANDS = 1;     // the blade is one hand's edge
-const CAM_WIDTH = 320;   // small detection frames = faster inference
-const CAM_HEIGHT = 240;
+const CAM_WIDTH = 480;   // small detection frames = faster inference
+const CAM_HEIGHT = 360;
 
 const SPAWN_MIN = 0.55;  // seconds between spawn waves (more fruit in play...)
 const SPAWN_MAX = 1.5;   // (...but they fall slower, so it stays catchable)
