@@ -51,7 +51,9 @@ python3 -m http.server
 
 It's a static site — import the repo on
 [Vercel](https://vercel.com/new) or Render (Static Site, publish
-directory `.`) and it works out of the box.
+directory `.`) and it works out of the box. A `vercel.json` pins Vercel
+to a plain static deploy (no framework, no build step) — if the import
+wizard asks for a framework preset, choose **Other**.
 
 ## Tests (no camera / browser needed)
 
