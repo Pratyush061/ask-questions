@@ -31,9 +31,9 @@ const CAM_HEIGHT = 360;
 const DETECT_WIDTH = 288;
 const DETECT_HEIGHT = 216;
 
-const SPAWN_MIN = 0.55;  // seconds between spawn waves (more fruit in play...)
-const SPAWN_MAX = 1.5;   // (...but they fall slower, so it stays catchable)
-const BURST_CHANCE = 0.3; // chance a wave drops 2-3 fruits at once
+const SPAWN_MIN = 1.0;  // seconds between spawn waves (more fruit in play...)
+const SPAWN_MAX = 2.5;   // (...but they fall slower, so it stays catchable)
+const BURST_CHANCE = 0.1; // chance a wave drops 2-3 fruits at once
 
 // ---- DOM --------------------------------------------------------------------
 const $ = (id) => document.getElementById(id);
@@ -241,14 +241,32 @@ async function start() {
   btn.disabled = true;
   try {
     showLoading(true, "Starting camera…");
-    const stream = await openCamera();
-    video.srcObject = stream;
-    await video.play();
-    if (!video.videoWidth) {
-      await new Promise((res) =>
-        video.addEventListener("loadedmetadata", res, { once: true })
-      );
-    }
+
+    let timedOut = false;
+    const timeout = new Promise((_, reject) =>
+      setTimeout(() => {
+        timedOut = true;
+        reject(new Error("Camera timed out. Please check permissions and try again."));
+      }, 8000)
+    );
+
+    const initCam = async () => {
+      const stream = await openCamera();
+      if (timedOut) {
+        stream.getTracks().forEach(t => t.stop());
+        return;
+      }
+      video.srcObject = stream;
+      await video.play();
+      if (!video.videoWidth) {
+        await new Promise((res) =>
+          video.addEventListener("loadedmetadata", res, { once: true })
+        );
+      }
+    };
+
+    await Promise.race([initCam(), timeout]);
+
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
     stage.style.aspectRatio = `${video.videoWidth} / ${video.videoHeight}`;
@@ -256,6 +274,7 @@ async function start() {
 
     sfx.init();
 
+    showLoading(false);
     btn.classList.add("hidden");
     setStatus("");
     $("hint").classList.remove("hidden");
@@ -270,6 +289,9 @@ async function start() {
     console.error(err);
     showLoading(false);
     btn.disabled = false;
+    btn.classList.remove("hidden");
+    const span = btn.querySelector("span:not(.big)");
+    if (span) span.textContent = "Retry camera";
     setStatus("Could not start: " + err.message);
   }
 }
@@ -441,8 +463,53 @@ function startDetector() {
   }
 }
 
+function enablePointerFallback() {
+  detectionMode = "mouse";
+  const W = canvas.width;
+  const H = canvas.height;
+  let isPointerDown = false;
+
+  const move = (e) => {
+    if (!isPointerDown) return;
+    const rect = canvas.getBoundingClientRect();
+    const x = (e.clientX - rect.left) * (W / rect.width);
+    const y = (e.clientY - rect.top) * (H / rect.height);
+    // Add two identical points to make it a point blade
+    blade.addSample(x, y, x, y, performance.now());
+    handSeen = true;
+    lastHandT = performance.now();
+
+    const fast = blade.speed() >= SLICE_SPEED;
+    if (fast && !swooshWasFast && performance.now() - sfx.lastSwoosh > 220) {
+      sfx.swoosh();
+      sfx.lastSwoosh = performance.now();
+    }
+    swooshWasFast = fast;
+    if (fast) {
+      for (const f of fruits) {
+        if (!f.dead && blade.cuts(f)) cutFruit(f);
+      }
+    }
+  };
+
+  const down = (e) => {
+    isPointerDown = true;
+    blade.clear();
+    move(e);
+  };
+  const up = () => {
+    isPointerDown = false;
+    blade.clear();
+    handSeen = false;
+  };
+
+  canvas.addEventListener("pointerdown", down);
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", up);
+}
+
 function fallbackToMainThread() {
-  if (detectionMode !== "worker") return; // never started, or already on main
+  if (detectionMode === "main" || detectionMode === "mouse") return;
   detectionMode = "main";
   try { detector && detector.terminate(); } catch (e) { /* ignore */ }
   detector = null;
@@ -450,7 +517,8 @@ function fallbackToMainThread() {
   (async () => {
     landmarker = await getModel();
     if (!landmarker) {
-      setStatus("Tracking failed: " + (modelError && modelError.message ? modelError.message : "model failed to load"));
+      setStatus("Tracking failed: " + (modelError && modelError.message ? modelError.message : "model failed to load") + " - falling back to mouse/touch.");
+      enablePointerFallback();
       return;
     }
     // Warm up the model once: the first detectForVideo compiles GPU
@@ -516,6 +584,7 @@ async function detectLoop() {
 // ---- main loop: physics + rendering only --------------------------------------------
 function loop(now) {
   if (!running) return;
+  if (!lastT) lastT = now; // Defensively initialize to avoid massive first-frame delta
   pumpWorker();
   const dt = Math.min(0.05, (now - lastT) / 1000);
   lastT = now;
@@ -649,7 +718,9 @@ function render() {
   ctx.save();
   ctx.translate(W, 0);
   ctx.scale(-1, 1);
-  ctx.drawImage(video, 0, 0, W, H);
+  if (video.readyState >= 2) {
+    ctx.drawImage(video, 0, 0, W, H);
+  }
   ctx.restore();
   ctx.fillStyle = "rgba(8, 10, 24, 0.45)";
   ctx.fillRect(0, 0, W, H);
