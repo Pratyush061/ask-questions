@@ -241,14 +241,32 @@ async function start() {
   btn.disabled = true;
   try {
     showLoading(true, "Starting camera…");
-    const stream = await openCamera();
-    video.srcObject = stream;
-    await video.play();
-    if (!video.videoWidth) {
-      await new Promise((res) =>
-        video.addEventListener("loadedmetadata", res, { once: true })
-      );
-    }
+
+    let timedOut = false;
+    const timeout = new Promise((_, reject) =>
+      setTimeout(() => {
+        timedOut = true;
+        reject(new Error("Camera timed out. Please check permissions and try again."));
+      }, 8000)
+    );
+
+    const initCam = async () => {
+      const stream = await openCamera();
+      if (timedOut) {
+        stream.getTracks().forEach(t => t.stop());
+        return;
+      }
+      video.srcObject = stream;
+      await video.play();
+      if (!video.videoWidth) {
+        await new Promise((res) =>
+          video.addEventListener("loadedmetadata", res, { once: true })
+        );
+      }
+    };
+
+    await Promise.race([initCam(), timeout]);
+
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
     stage.style.aspectRatio = `${video.videoWidth} / ${video.videoHeight}`;
@@ -271,6 +289,9 @@ async function start() {
     console.error(err);
     showLoading(false);
     btn.disabled = false;
+    btn.classList.remove("hidden");
+    const span = btn.querySelector("span:not(.big)");
+    if (span) span.textContent = "Retry camera";
     setStatus("Could not start: " + err.message);
   }
 }
@@ -437,8 +458,53 @@ function startDetector() {
   }
 }
 
+function enablePointerFallback() {
+  detectionMode = "mouse";
+  const W = canvas.width;
+  const H = canvas.height;
+  let isPointerDown = false;
+
+  const move = (e) => {
+    if (!isPointerDown) return;
+    const rect = canvas.getBoundingClientRect();
+    const x = (e.clientX - rect.left) * (W / rect.width);
+    const y = (e.clientY - rect.top) * (H / rect.height);
+    // Add two identical points to make it a point blade
+    blade.addSample(x, y, x, y, performance.now());
+    handSeen = true;
+    lastHandT = performance.now();
+
+    const fast = blade.speed() >= SLICE_SPEED;
+    if (fast && !swooshWasFast && performance.now() - sfx.lastSwoosh > 220) {
+      sfx.swoosh();
+      sfx.lastSwoosh = performance.now();
+    }
+    swooshWasFast = fast;
+    if (fast) {
+      for (const f of fruits) {
+        if (!f.dead && blade.cuts(f)) cutFruit(f);
+      }
+    }
+  };
+
+  const down = (e) => {
+    isPointerDown = true;
+    blade.clear();
+    move(e);
+  };
+  const up = () => {
+    isPointerDown = false;
+    blade.clear();
+    handSeen = false;
+  };
+
+  canvas.addEventListener("pointerdown", down);
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", up);
+}
+
 function fallbackToMainThread() {
-  if (detectionMode === "main") return; // never started, or already on main
+  if (detectionMode === "main" || detectionMode === "mouse") return;
   detectionMode = "main";
   try { detector && detector.terminate(); } catch (e) { /* ignore */ }
   detector = null;
@@ -446,7 +512,8 @@ function fallbackToMainThread() {
   (async () => {
     landmarker = await getModel();
     if (!landmarker) {
-      setStatus("Tracking failed: " + (modelError && modelError.message ? modelError.message : "model failed to load"));
+      setStatus("Tracking failed: " + (modelError && modelError.message ? modelError.message : "model failed to load") + " - falling back to mouse/touch.");
+      enablePointerFallback();
       return;
     }
     // Warm up the model once: the first detectForVideo compiles GPU
