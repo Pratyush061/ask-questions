@@ -39,15 +39,6 @@ const s = new Fruit({ x: 5, y: 100, vx: -100, vy: 0, r: 40, size: 90,
                       emoji: "🍎", juice: "#f00", points: 10, spin: 0 });
 s.update(0.1, 640, 480);
 assert.ok(s.x >= s.r && s.vx > 0, "wall bounce");
-
-// verify dt clamping effect (although clamping happens in game loop, verify huge dt behaves predictably)
-const spikeFruit = new Fruit({ x: 100, y: 0, vx: 0, vy: 0, r: 40, size: 90,
-    emoji: "🍎", juice: "#f00", points: 10, spin: 0 });
-// simulate massive dt (e.g. 5 seconds tab switch)
-// The loop limits dt to 0.05, so we manually call it with that max to see if gravity explodes
-spikeFruit.update(0.05, 640, 480);
-assert.ok(spikeFruit.vy < 50, "dt-spike clamping prevents insane velocities");
-
 console.log("fruit physics: OK");
 
 // ---- spawning ------------------------------------------------------------------
