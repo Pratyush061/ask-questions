@@ -21,15 +21,15 @@ const WASM_BASE =
   "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
 
 // ---- performance tuning ----------------------------------------------------
-const NUM_HANDS = 1;     // the blade is one hand's edge
+const NUM_HANDS = 2;     // up to two hands at once
 const CAM_WIDTH = 480;   // camera resolution for the on-screen preview
 const CAM_HEIGHT = 360;
 
 // Inference runs on a much smaller offscreen copy of the frame (the model
 // resizes its input internally anyway, so accuracy barely changes but the
 // per-detection upload cost drops hard).
-const DETECT_WIDTH = 288;
-const DETECT_HEIGHT = 216;
+const DETECT_WIDTH = 384;
+const DETECT_HEIGHT = 288;
 
 const SPAWN_MIN = 1.0;  // seconds between spawn waves (more fruit in play...)
 const SPAWN_MAX = 2.5;   // (...but they fall slower, so it stays catchable)
@@ -43,7 +43,7 @@ const ctx = canvas.getContext("2d");
 const stage = $("stage");
 
 // ---- game state ----------------------------------------------------------------
-const blade = new Blade();
+const blades = [new Blade(), new Blade()]; // support up to 2 hands
 const combo = new ComboTracker();
 let fruits = [];       // Fruit[]
 let halves = [];       // sliced fruit halves flying apart
@@ -54,22 +54,22 @@ let running = false;
 let lastT = 0;
 let lastVideoTime = -1;
 let detectErrors = 0;
-let handSeen = false;
 let score = 0;
 let cuts = 0;
 let best = 0;
 try { best = parseInt(localStorage.getItem("hn-best") ?? "0", 10) || 0; } catch (e) { /* ignore */ }
 let spawnTimer = 1.0;
 let swooshWasFast = false;
-let lastHandT = 0; // last time real landmarks were seen (for coasting)
+let lastHandTs = [0, 0]; // last time real landmarks were seen (for coasting) per hand
+let handSeen = [false, false];
 
 // offscreen detection canvas + landmark smoothing
 const detectCanvas = document.createElement("canvas");
 detectCanvas.width = DETECT_WIDTH;
 detectCanvas.height = DETECT_HEIGHT;
 const detectCtx = detectCanvas.getContext("2d");
-const wristFilter = new OneEuro2();
-const pinkyFilter = new OneEuro2();
+const wristFilters = [new OneEuro2(), new OneEuro2()];
+const pinkyFilters = [new OneEuro2(), new OneEuro2()];
 
 // ---- detection worker -----------------------------------------------------------
 // MediaPipe runs in a Web Worker on its own thread: no matter how heavy the
@@ -328,7 +328,7 @@ $("resetBtn").addEventListener("click", () => {
 });
 
 document.addEventListener("visibilitychange", () => {
-  if (document.hidden) blade.clear(); // avoid a phantom mega-slice on return
+  if (document.hidden) blades.forEach(b => b.clear()); // avoid a phantom mega-slice on return
 });
 
 // ---- spawning -----------------------------------------------------------------
@@ -338,7 +338,7 @@ function spawnWave() {
 }
 
 // ---- slicing --------------------------------------------------------------------
-function cutFruit(f) {
+function cutFruit(f, blade) {
   f.dead = true;
   cuts += 1;
   score += f.points;
@@ -387,54 +387,64 @@ function cutFruit(f) {
 }
 
 /* Shared handling of one detection result, whether it came from the worker
-   or the main-thread fallback. `hand` is the array of normalized landmarks
-   (or null), `now` the timestamp the frame was captured. */
-function handleLandmarks(hand, now) {
-  if (hand && hand.length) {
-    const W = canvas.width;
-    const H = canvas.height;
-    // blade = wrist (0) -> pinky knuckle (17), mirrored to screen space
-    // and smoothed with a One-Euro filter: steady when the hand is
-    // still, essentially no lag when it swings
-    const wr = wristFilter.filter((1 - hand[0].x) * W, hand[0].y * H, now);
-    const pk = pinkyFilter.filter((1 - hand[17].x) * W, hand[17].y * H, now);
-    blade.addSample(wr.x, wr.y, pk.x, pk.y, now);
-    handSeen = true;
-    lastHandT = now;
-  } else if (now - lastHandT < COAST_MS) {
-    // Tracking dropout during a swing: coast. The blade keeps gliding
-    // in its last direction with decaying speed instead of blinking
-    // out, so a chop that briefly outpaces the camera still lands.
-    const l = blade.last;
-    if (l) {
-      const v = blade.velocity();
-      const dt = (now - l.t) / 1000;
-      const decay = Math.exp(-dt / 0.08);
-      blade.addSample(
-        l.ax + v.vx * dt * decay, l.ay + v.vy * dt * decay,
-        l.bx + v.vx * dt * decay, l.by + v.vy * dt * decay,
-        now
-      );
+   or the main-thread fallback. `hands` is an array of hand arrays (each
+   an array of normalized landmarks) (or empty), `now` the timestamp the frame was captured. */
+function handleLandmarks(hands, now) {
+  const W = canvas.width;
+  const H = canvas.height;
+  let anyFast = false;
+
+  for (let i = 0; i < NUM_HANDS; i++) {
+    const hand = hands && hands[i];
+    const blade = blades[i];
+
+    if (hand && hand.length) {
+      // blade = wrist (0) -> pinky knuckle (17), mirrored to screen space
+      // and smoothed with a One-Euro filter: steady when the hand is
+      // still, essentially no lag when it swings
+      const wr = wristFilters[i].filter((1 - hand[0].x) * W, hand[0].y * H, now);
+      const pk = pinkyFilters[i].filter((1 - hand[17].x) * W, hand[17].y * H, now);
+      blade.addSample(wr.x, wr.y, pk.x, pk.y, now);
+      handSeen[i] = true;
+      lastHandTs[i] = now;
+    } else if (now - lastHandTs[i] < COAST_MS) {
+      // Tracking dropout during a swing: coast. The blade keeps gliding
+      // in its last direction with decaying speed instead of blinking
+      // out, so a chop that briefly outpaces the camera still lands.
+      const l = blade.last;
+      if (l) {
+        const v = blade.velocity();
+        const dt = (now - l.t) / 1000;
+        const decay = Math.exp(-dt / 0.08);
+        blade.addSample(
+          l.ax + v.vx * dt * decay, l.ay + v.vy * dt * decay,
+          l.bx + v.vx * dt * decay, l.by + v.vy * dt * decay,
+          now
+        );
+      }
+    } else {
+      blade.clear();
+      handSeen[i] = false;
     }
-  } else {
-    blade.clear();
-    handSeen = false;
-  }
-  // Slice check runs on every fresh OR coasted sample: a swing that
-  // happens entirely inside a dropout still cuts through its path.
-  if (handSeen) {
-    const fast = blade.speed() >= SLICE_SPEED;
-    if (fast && !swooshWasFast && now - sfx.lastSwoosh > 220) {
-      sfx.swoosh();
-      sfx.lastSwoosh = now;
-    }
-    swooshWasFast = fast;
-    if (fast) {
-      for (const f of fruits) {
-        if (!f.dead && blade.cuts(f)) cutFruit(f);
+
+    // Slice check runs on every fresh OR coasted sample: a swing that
+    // happens entirely inside a dropout still cuts through its path.
+    if (handSeen[i]) {
+      const fast = blade.speed() >= SLICE_SPEED;
+      if (fast) anyFast = true;
+      if (fast) {
+        for (const f of fruits) {
+          if (!f.dead && blade.cuts(f)) cutFruit(f, blade);
+        }
       }
     }
   }
+
+  if (anyFast && !swooshWasFast && now - sfx.lastSwoosh > 220) {
+    sfx.swoosh();
+    sfx.lastSwoosh = now;
+  }
+  swooshWasFast = anyFast;
 }
 
 function startDetector() {
@@ -449,7 +459,7 @@ function startDetector() {
         fallbackToMainThread();
         return;
       }
-      handleLandmarks(d.hand, d.t ?? performance.now());
+      handleLandmarks(d.hands, d.t ?? performance.now());
     };
     detector.onerror = () => fallbackToMainThread();
     detectionMode = "worker";
@@ -475,9 +485,10 @@ function enablePointerFallback() {
     const x = (e.clientX - rect.left) * (W / rect.width);
     const y = (e.clientY - rect.top) * (H / rect.height);
     // Add two identical points to make it a point blade
+    const blade = blades[0];
     blade.addSample(x, y, x, y, performance.now());
-    handSeen = true;
-    lastHandT = performance.now();
+    handSeen[0] = true;
+    lastHandTs[0] = performance.now();
 
     const fast = blade.speed() >= SLICE_SPEED;
     if (fast && !swooshWasFast && performance.now() - sfx.lastSwoosh > 220) {
@@ -487,20 +498,20 @@ function enablePointerFallback() {
     swooshWasFast = fast;
     if (fast) {
       for (const f of fruits) {
-        if (!f.dead && blade.cuts(f)) cutFruit(f);
+        if (!f.dead && blade.cuts(f)) cutFruit(f, blade);
       }
     }
   };
 
   const down = (e) => {
     isPointerDown = true;
-    blade.clear();
+    blades[0].clear();
     move(e);
   };
   const up = () => {
     isPointerDown = false;
-    blade.clear();
-    handSeen = false;
+    blades[0].clear();
+    handSeen[0] = false;
   };
 
   canvas.addEventListener("pointerdown", down);
@@ -567,7 +578,10 @@ async function detectLoop() {
         const now = performance.now();
         detectCtx.drawImage(video, 0, 0, DETECT_WIDTH, DETECT_HEIGHT);
         const result = landmarker.detectForVideo(detectCanvas, now);
-        handleLandmarks(result.landmarks && result.landmarks[0], now);
+        const hands = (result.landmarks || []).map((hand) =>
+          hand.map((p) => ({ x: p.x, y: p.y }))
+        );
+        handleLandmarks(hands, now);
         detectErrors = 0;
       }
     } catch (err) {
@@ -727,41 +741,44 @@ function render() {
 
   // soft blade edge so the player sees their blade even when still — drawn
   // at a lightly extrapolated position so it glides between detection frames
-  const lastSample = blade.last;
-  if (handSeen && lastSample) {
-    const v = blade.velocity();
-    const dt = Math.min(0.05, (performance.now() - lastSample.t) / 1000);
-    const decay = Math.exp(-dt / 0.08);
-    const ex = v.vx * dt * decay;
-    const ey = v.vy * dt * decay;
-    ctx.save();
-    ctx.globalAlpha = 0.35;
-    ctx.strokeStyle = "#7df9ff";
-    ctx.lineWidth = 5;
-    ctx.lineCap = "round";
-    ctx.beginPath();
-    ctx.moveTo(lastSample.ax + ex, lastSample.ay + ey);
-    ctx.lineTo(lastSample.bx + ex, lastSample.by + ey);
-    ctx.stroke();
-    ctx.restore();
-  }
-
-  // glowing slice trail
-  const trail = blade.trail();
-  if (handSeen && trail.length > 3) {
-    ctx.save();
-    ctx.globalCompositeOperation = "lighter";
-    for (let i = 1; i < trail.length; i++) {
-      const a = (i / trail.length) * 0.5;
-      ctx.strokeStyle = `rgba(125, 249, 255, ${a})`;
-      ctx.lineWidth = 2 + (i / trail.length) * 10;
+  for (let i = 0; i < NUM_HANDS; i++) {
+    const blade = blades[i];
+    const lastSample = blade.last;
+    if (handSeen[i] && lastSample) {
+      const v = blade.velocity();
+      const dt = Math.min(0.05, (performance.now() - lastSample.t) / 1000);
+      const decay = Math.exp(-dt / 0.08);
+      const ex = v.vx * dt * decay;
+      const ey = v.vy * dt * decay;
+      ctx.save();
+      ctx.globalAlpha = 0.35;
+      ctx.strokeStyle = "#7df9ff";
+      ctx.lineWidth = 5;
       ctx.lineCap = "round";
       ctx.beginPath();
-      ctx.moveTo(trail[i - 1].x, trail[i - 1].y);
-      ctx.lineTo(trail[i].x, trail[i].y);
+      ctx.moveTo(lastSample.ax + ex, lastSample.ay + ey);
+      ctx.lineTo(lastSample.bx + ex, lastSample.by + ey);
       ctx.stroke();
+      ctx.restore();
     }
-    ctx.restore();
+
+    // glowing slice trail
+    const trail = blade.trail();
+    if (handSeen[i] && trail.length > 3) {
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      for (let j = 1; j < trail.length; j++) {
+        const a = (j / trail.length) * 0.5;
+        ctx.strokeStyle = `rgba(125, 249, 255, ${a})`;
+        ctx.lineWidth = 2 + (j / trail.length) * 10;
+        ctx.lineCap = "round";
+        ctx.beginPath();
+        ctx.moveTo(trail[j - 1].x, trail[j - 1].y);
+        ctx.lineTo(trail[j].x, trail[j].y);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
   }
 
   // fruits (pre-rendered sprites — cheap blits, no per-frame shadowBlur)

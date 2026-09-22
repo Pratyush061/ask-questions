@@ -22,9 +22,9 @@ const WASM_BASE =
   "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
 
 // keep in sync with game.js (duplicated so the worker is self-contained)
-const NUM_HANDS = 1;
-const DETECT_WIDTH = 288;
-const DETECT_HEIGHT = 216;
+const NUM_HANDS = 2;
+const DETECT_WIDTH = 384;
+const DETECT_HEIGHT = 288;
 
 const off = new OffscreenCanvas(DETECT_WIDTH, DETECT_HEIGHT);
 const offCtx = off.getContext("2d");
@@ -41,9 +41,9 @@ function ensureLandmarker() {
         numHands: NUM_HANDS,
         // Relaxed thresholds: fast chops blur the hand; at 0.5 the tracker
         // falls back to slow palm re-detection exactly when a cut must land.
-        minHandDetectionConfidence: 0.4,
-        minHandPresenceConfidence: 0.4,
-        minTrackingConfidence: 0.4,
+        minHandDetectionConfidence: 0.3,
+        minHandPresenceConfidence: 0.3,
+        minTrackingConfidence: 0.3,
       });
       try {
         return await HandLandmarker.createFromOptions(fileset, opts("GPU"));
@@ -63,18 +63,20 @@ self.onmessage = async (ev) => {
     offCtx.drawImage(bitmap, 0, 0, DETECT_WIDTH, DETECT_HEIGHT);
     bitmap.close();
     const result = landmarker.detectForVideo(off, t);
-    const hand = result.landmarks && result.landmarks[0];
+    const hands = (result.landmarks || []).map((hand) =>
+      hand.map((p) => ({ x: p.x, y: p.y }))
+    );
     self.postMessage({
       type: "result",
       t,
-      hand: hand ? hand.map((p) => ({ x: p.x, y: p.y })) : null,
+      hands,
     });
   } catch (err) {
     try { bitmap.close(); } catch (e) { /* already closed */ }
     self.postMessage({
       type: "result",
       t,
-      hand: null,
+      hands: [],
       error: String((err && err.message) || err),
     });
   }

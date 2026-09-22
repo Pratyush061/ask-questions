@@ -28,46 +28,53 @@ function rand() {
 /* The engine harness — mirrors game.js's handleLandmarks exactly (no
    sound/DOM). */
 function makeEngine() {
-  const blade = new Blade();
+  const NUM_HANDS = 2;
+  const blades = [new Blade(), new Blade()];
   const combo = new ComboTracker();
-  const wristFilter = new OneEuro2();
-  const pinkyFilter = new OneEuro2();
+  const wristFilters = [new OneEuro2(), new OneEuro2()];
+  const pinkyFilters = [new OneEuro2(), new OneEuro2()];
   const st = {
     fruits: [], score: 0, cuts: 0, comboBonuses: 0,
-    handSeen: false, lastHandT: -1e9,
+    handSeen: [false, false], lastHandTs: [-1e9, -1e9],
   };
 
-  function handle(hand, now) {
-    if (hand && hand.length) {
-      const wr = wristFilter.filter((1 - hand[0].x) * W, hand[0].y * H, now);
-      const pk = pinkyFilter.filter((1 - hand[17].x) * W, hand[17].y * H, now);
-      blade.addSample(wr.x, wr.y, pk.x, pk.y, now);
-      st.handSeen = true;
-      st.lastHandT = now;
-    } else if (now - st.lastHandT < COAST_MS) {
-      const l = blade.last;
-      if (l) {
-        const v = blade.velocity();
-        const dt = (now - l.t) / 1000;
-        const decay = Math.exp(-dt / 0.08);
-        blade.addSample(
-          l.ax + v.vx * dt * decay, l.ay + v.vy * dt * decay,
-          l.bx + v.vx * dt * decay, l.by + v.vy * dt * decay,
-          now
-        );
+  function handle(hands, now) {
+    for (let i = 0; i < NUM_HANDS; i++) {
+      const hand = hands && hands[i];
+      const blade = blades[i];
+
+      if (hand && hand.length) {
+        const wr = wristFilters[i].filter((1 - hand[0].x) * W, hand[0].y * H, now);
+        const pk = pinkyFilters[i].filter((1 - hand[17].x) * W, hand[17].y * H, now);
+        blade.addSample(wr.x, wr.y, pk.x, pk.y, now);
+        st.handSeen[i] = true;
+        st.lastHandTs[i] = now;
+      } else if (now - st.lastHandTs[i] < COAST_MS) {
+        const l = blade.last;
+        if (l) {
+          const v = blade.velocity();
+          const dt = (now - l.t) / 1000;
+          const decay = Math.exp(-dt / 0.08);
+          blade.addSample(
+            l.ax + v.vx * dt * decay, l.ay + v.vy * dt * decay,
+            l.bx + v.vx * dt * decay, l.by + v.vy * dt * decay,
+            now
+          );
+        }
+      } else {
+        blade.clear();
+        st.handSeen[i] = false;
       }
-    } else {
-      blade.clear();
-      st.handSeen = false;
-    }
-    if (st.handSeen) {
-      if (blade.speed() >= SLICE_SPEED) {
-        for (const f of st.fruits) {
-          if (!f.dead && blade.cuts(f)) {
-            f.dead = true;
-            st.cuts += 1;
-            st.score += f.points;
-            combo.registerCut(now);
+
+      if (st.handSeen[i]) {
+        if (blade.speed() >= SLICE_SPEED) {
+          for (const f of st.fruits) {
+            if (!f.dead && blade.cuts(f)) {
+              f.dead = true;
+              st.cuts += 1;
+              st.score += f.points;
+              combo.registerCut(now);
+            }
           }
         }
       }
@@ -84,7 +91,7 @@ function makeEngine() {
     return null;
   }
 
-  return { blade, combo, st, handle, tickCombos };
+  return { blades, combo, st, handle, tickCombos };
 }
 
 function spawnInto(st, count = 1) {
@@ -143,7 +150,8 @@ function handAt(t, chop) {
       if (inChop && t === chopStart) chops++;
       // the last stretch of each chop is a tracking dropout (motion blur)
       const dropout = inChop && t >= chopStart + 100;
-      handle(dropout ? null : handAt(t, chop), t);
+      const h = dropout ? null : handAt(t, chop);
+      handle(h ? [h] : [], t);
       detMs += DETECT_DT * 1000;
     }
     frame++;
@@ -162,7 +170,7 @@ function handAt(t, chop) {
   st.fruits.push(new Fruit({ x: (1 - 0.3) * W, y: 0.5 * H + 45, vx: 0, vy: 0, r: 30,
                              size: 70, emoji: "🍎", juice: "#f00", points: 10, spin: 0 }));
   for (let t = 0; t <= 2000; t += 33) {
-    handle(handAt(t, null), t);
+    handle([handAt(t, null)], t);
     stepPhysics(st, 33 / 1000);
   }
   assert.equal(st.cuts, 0, "hovering hand never cuts");
@@ -180,12 +188,13 @@ function handAt(t, chop) {
   st.fruits.push(new Fruit({ x: 0.5 * W, y: 0.5 * H + 45, vx: 0, vy: 0, r: 30,
                              size: 70, emoji: "🍉", juice: "#f50", points: 10, spin: 0 }));
   // warm up the filters with a still hand first (so the filter doesn't eat the swing)
-  for (let t = 0; t <= 1000; t += 33) handle(handAt(t, null), t);
+  for (let t = 0; t <= 1000; t += 33) handle([handAt(t, null)], t);
   // chop from x=0.15 to 0.85 over 150ms, with detection dropping out from 40ms..120ms
   const chop = { t0: 1100, dur: 150, x0: 0.15, x1: 0.85 };
   for (let t = 1100; t <= 1300; t += 33) {
     const dropout = t >= 1140 && t < 1220; // mid-swing dropout
-    handle(dropout ? null : handAt(t, chop), t);
+    const h = dropout ? null : handAt(t, chop);
+    handle(h ? [h] : [], t);
     stepPhysics(st, 33 / 1000);
   }
   assert.ok(st.cuts >= 1, `coasting cuts through a mid-swing dropout (got ${st.cuts} cuts)`);
@@ -201,11 +210,12 @@ function handAt(t, chop) {
     st.fruits.push(new Fruit({ x: x * W, y: 0.5 * H + 45, vx: 0, vy: 0, r: 30,
                                size: 70, emoji: "🍊", juice: "#fa0", points: 10, spin: 0 }));
   }
-  for (let t = 0; t <= 1000; t += 33) handle(handAt(t, null), t);
+  for (let t = 0; t <= 1000; t += 33) handle([handAt(t, null)], t);
   const chop = { t0: 1100, dur: 150, x0: 0.15, x1: 0.85 };
   let comboResult = null;
   for (let t = 1100; t <= 2000; t += 33) {
-    handle(handAt(t, t <= 1300 ? chop : null), t);
+    const h = handAt(t, t <= 1300 ? chop : null);
+    handle([h], t);
     stepPhysics(st, 33 / 1000);
     comboResult = tickCombos(t) || comboResult;
   }
@@ -240,7 +250,7 @@ function handAt(t, chop) {
     while (detMs <= ms) {
       const t = detMs;
       const chop = (t % 2500 < 200) ? { t0: Math.floor(t / 2500) * 2500, dur: 150, x0: 0.1, x1: 0.9 } : null;
-      handle(handAt(t, chop), t);
+      handle([handAt(t, chop)], t);
       detMs += DETECT_DT * 1000;
     }
     frame++;
